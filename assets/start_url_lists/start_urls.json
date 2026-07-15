@@ -1,0 +1,284 @@
+{
+    "crawler_seeds": [
+        {
+            "url": "https://curlie.org/en/Arts/",
+            "category": "Curlie Categories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://curlie.org/en/Business/",
+            "category": "Curlie Categories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://curlie.org/en/Computers/",
+            "category": "Curlie Categories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://curlie.org/en/Games/",
+            "category": "Curlie Categories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://curlie.org/en/Health/",
+            "category": "Curlie Categories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://curlie.org/en/Home/",
+            "category": "Curlie Categories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://curlie.org/en/News/",
+            "category": "Curlie Categories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://curlie.org/en/Recreation/",
+            "category": "Curlie Categories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://curlie.org/en/Reference/",
+            "category": "Curlie Categories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://curlie.org/en/Regional/",
+            "category": "Curlie Categories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://curlie.org/en/Science/",
+            "category": "Curlie Categories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://curlie.org/en/Shopping/",
+            "category": "Curlie Categories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://curlie.org/en/Society/",
+            "category": "Curlie Categories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://curlie.org/en/Sports/",
+            "category": "Curlie Categories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://curlie.org/en/Kids_and_Teens/",
+            "category": "Curlie Categories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://en.wikipedia.org/wiki/List_of_academic_databases_and_search_engines",
+            "category": "Wikipedia Lists",
+            "priority": "high"
+        },
+        {
+            "url": "https://en.wikipedia.org/wiki/List_of_blogs",
+            "category": "Wikipedia Lists",
+            "priority": "high"
+        },
+        {
+            "url": "https://en.wikipedia.org/wiki/List_of_online_databases",
+            "category": "Wikipedia Lists",
+            "priority": "high"
+        },
+        {
+            "url": "https://en.wikipedia.org/wiki/List_of_online_dictionaries",
+            "category": "Wikipedia Lists",
+            "priority": "high"
+        },
+        {
+            "url": "https://en.wikipedia.org/wiki/List_of_online_encyclopedias",
+            "category": "Wikipedia Lists",
+            "priority": "high"
+        },
+        {
+            "url": "https://en.wikipedia.org/wiki/List_of_Internet_forums",
+            "category": "Wikipedia Lists",
+            "priority": "high"
+        },
+        {
+            "url": "https://en.wikipedia.org/wiki/List_of_search_engines",
+            "category": "Wikipedia Lists",
+            "priority": "high"
+        },
+        {
+            "url": "https://en.wikipedia.org/wiki/List_of_social_networking_services",
+            "category": "Wikipedia Lists",
+            "priority": "high"
+        },
+        {
+            "url": "https://en.wikipedia.org/wiki/List_of_online_video_platforms",
+            "category": "Wikipedia Lists",
+            "priority": "high"
+        },
+        {
+            "url": "https://en.wikipedia.org/wiki/List_of_web_directories",
+            "category": "Wikipedia Lists",
+            "priority": "high"
+        },
+        {
+            "url": "https://en.wikipedia.org/wiki/List_of_wikis",
+            "category": "Wikipedia Lists",
+            "priority": "high"
+        },
+        {
+            "url": "https://en.wikipedia.org/wiki/List_of_most-visited_websites",
+            "category": "Wikipedia Lists",
+            "priority": "high"
+        },
+        {
+            "url": "https://github.com/sindresorhus/awesome",
+            "category": "GitHub Awesome Lists",
+            "priority": "high"
+        },
+        {
+            "url": "https://github.com/bayandin/awesome-awesomeness",
+            "category": "GitHub Awesome Lists",
+            "priority": "high"
+        },
+        {
+            "url": "https://github.com/getify/You-Dont-Know-JS",
+            "category": "GitHub Awesome Lists",
+            "priority": "high"
+        },
+        {
+            "url": "https://github.com/kamranahmedse/developer-roadmap",
+            "category": "GitHub Awesome Lists",
+            "priority": "high"
+        },
+        {
+            "url": "https://github.com/public-apis/public-apis",
+            "category": "GitHub Awesome Lists",
+            "priority": "high"
+        },
+        {
+            "url": "https://www.jasminedirectory.com/",
+            "category": "Modern Web Directories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://www.botw.org/",
+            "category": "Modern Web Directories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://www.directoryworld.net/",
+            "category": "Modern Web Directories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://www.allthewebsites.com/",
+            "category": "Modern Web Directories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://www.somuch.com/",
+            "category": "Modern Web Directories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://www.cipinet.com/",
+            "category": "Modern Web Directories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://www.joeant.com/",
+            "category": "Modern Web Directories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://www.elib.org/",
+            "category": "Modern Web Directories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://www.webworldindex.com/",
+            "category": "Modern Web Directories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://www.viesearch.com/",
+            "category": "Modern Web Directories",
+            "priority": "medium"
+        },
+        {
+            "url": "https://news.google.com/",
+            "category": "News Aggregators & Feeds",
+            "priority": "medium"
+        },
+        {
+            "url": "https://www.bing.com/news",
+            "category": "News Aggregators & Feeds",
+            "priority": "medium"
+        },
+        {
+            "url": "https://www.reuters.com/",
+            "category": "News Aggregators & Feeds",
+            "priority": "medium"
+        },
+        {
+            "url": "https://www.apnews.com/",
+            "category": "News Aggregators & Feeds",
+            "priority": "medium"
+        },
+        {
+            "url": "https://www.bbc.com/news",
+            "category": "News Aggregators & Feeds",
+            "priority": "medium"
+        },
+        {
+            "url": "https://www.nytimes.com/",
+            "category": "News Aggregators & Feeds",
+            "priority": "medium"
+        },
+        {
+            "url": "https://www.theguardian.com/international",
+            "category": "News Aggregators & Feeds",
+            "priority": "medium"
+        },
+        {
+            "url": "https://news.ycombinator.com/",
+            "category": "Technical & Developer Hubs",
+            "priority": "medium"
+        },
+        {
+            "url": "https://reddit.com/r/programming/",
+            "category": "Technical & Developer Hubs",
+            "priority": "medium"
+        },
+        {
+            "url": "https://stackoverflow.com/questions",
+            "category": "Technical & Developer Hubs",
+            "priority": "medium"
+        },
+        {
+            "url": "https://dev.to/",
+            "category": "Technical & Developer Hubs",
+            "priority": "medium"
+        },
+        {
+            "url": "https://hashnode.com/",
+            "category": "Technical & Developer Hubs",
+            "priority": "medium"
+        },
+        {
+            "url": "https://medium.com/topic/technology",
+            "category": "Technical & Developer Hubs",
+            "priority": "medium"
+        }
+    ],
+    "metadata": {
+        "total_count": 55,
+        "description": "Seed URLs for web crawler with high outbound link density",
+        "date_generated": "2026-07-15"
+    }
+}
