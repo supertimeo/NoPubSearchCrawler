@@ -12,23 +12,16 @@ from contextlib import contextmanager
 import gc
 from itertools import count
 from functools import lru_cache
+from collections import deque, defaultdict
 
-import multiprocessing
-import queue
-
-# imports pour l'optimisation
-from numba.typed import Dict, List  # type: ignore
-from numba.types import Tuple  # type: ignore
-from numba import njit  # type: ignore
-import numba  # type: ignore
+import heapq
 
 # import pour le scraping et le crawling
 import requests # type: ignore
 from selectolax.parser import HTMLParser # type: ignore
 import urllib # type: ignore
 from urllib.robotparser import RobotFileParser # type: ignore
-from urllib.parse import urlparse, urljoin, urlunparse, ParseResult # type: ignore
-from urllib.error import URLError # type: ignore
+from urllib.parse import urlparse, urljoin, urlunparse, ParseResult, parse_qsl, urlencode # type: ignore
 from urllib.request import urlopen # type: ignore
 import urllib3 # type: ignore
 import socket # type: ignore
@@ -67,7 +60,7 @@ args = parser.parse_args()
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 WAITING_DELAY = 5
-NUM_CRAWLERS = 4
+NUM_CRAWLERS = 15
 
 if args.delete_logs:
     if os.path.exists("crawler.log"):
@@ -125,15 +118,15 @@ if args.vacuum:
 sync_conn.execute("PRAGMA journal_mode=WAL;") # <--- INDISPENSABLE
 sync_conn.execute("PRAGMA synchronous=NORMAL;") # Optionnel, mais boost les perfs d'écriture
 
-sync_cursor.execute("CREATE TABLE IF NOT EXISTS waiting_list (domain_date INTEGER, date INTEGER, url TEXT UNIQUE, id INTEGER UNIQUE PRIMARY KEY AUTOINCREMENT)")
+sync_cursor.execute("CREATE TABLE IF NOT EXISTS waiting_list (url TEXT UNIQUE, last_crawled_time INTEGER, next_domain_crawl_time INTEGER, id INTEGER UNIQUE PRIMARY KEY AUTOINCREMENT)")
 sync_cursor.execute("CREATE TABLE IF NOT EXISTS pages (url TEXT, title TEXT, content TEXT, links TEXT)")
 sync_cursor.execute("CREATE TABLE IF NOT EXISTS crawled_urls (url TEXT UNIQUE)")
-sync_cursor.execute("CREATE TEMP TABLE temp_waiting_list (url TEXT UNIQUE, domain_date INTEGER, date INTEGER)")
+sync_cursor.execute("CREATE TEMP TABLE temp_waiting_list (url TEXT UNIQUE, last_crawled_time INTEGER, next_domain_crawl_time INTEGER)")
 
-sync_cursor.execute("CREATE INDEX IF NOT EXISTS idx_waiting_list ON waiting_list (domain_date, date, url, id)")
+sync_cursor.execute("CREATE INDEX IF NOT EXISTS idx_waiting_list ON waiting_list (next_domain_crawl_time, last_crawled_time, url, id)")
 sync_cursor.execute("CREATE INDEX IF NOT EXISTS idx_pages ON pages (url, title, content, links)")
 sync_cursor.execute("CREATE INDEX IF NOT EXISTS idx_crawled_urls ON crawled_urls (url)")
-sync_cursor.execute("CREATE INDEX IF NOT EXISTS idx_temp_waiting_list ON temp_waiting_list (domain_date, date, url)")
+sync_cursor.execute("CREATE INDEX IF NOT EXISTS idx_temp_waiting_list ON temp_waiting_list (next_domain_crawl_time, last_crawled_time, url)")
 sync_conn.commit()
 sync_conn.close()
 del sync_cursor
@@ -148,94 +141,62 @@ crawler_logger.info(f"Crawled urls bloom-filter initialized in {time.time() - st
 # création du cache
 cache = Cache("robots_txts")
 
-def increment_tie_breaker():
-    """Increment and return the tie-breaker counter."""
-    with tie_breaker_counter_lock:
-        return next(tie_breaker_counter)
-
-def _process_worker_wrapper(func, q, args, kwargs):
-    """
-    Fonction exécutée dans le processus enfant.
-    Cette fonction doit être définie au niveau du module (top-level) pour fonctionner sur Windows.
-    """
-    try:
-        result = func(*args, **kwargs)
-        q.put(("OK", result))
-    except Exception as e:
-        q.put(("ERR", e))
-
-@contextmanager
-def timeout_manager(timeout: float):
-    """
-    Context manager qui fournit une fonction 'run' pour exécuter du code 
-    dans un processus séparé avec un timeout strict (kill -9).
-    
-    Usage:
-        with safe_process_timeout(5) as run:
-            result = run(ma_fonction_bloquante, arg1, arg2)
-    """
-    
-    def run_in_process(func: Callable, *args, **kwargs) -> Any:
-        # Création de la queue de communication
-        q: multiprocessing.Queue = multiprocessing.Queue()
-        
-        # Création du processus
-        # On passe la fonction wrapper, pas la fonction cible directement
-        p: multiprocessing.Process = multiprocessing.Process(
-            target=_process_worker_wrapper, 
-            args=(func, q, args, kwargs)
-        )
-        p.daemon = True  # Le processus meurt si le parent meurt
-        p.start()
-
-        try:
-            # On attend le résultat avec le timeout défini
-            status, payload = q.get(timeout=timeout)
-            
-            # Si on arrive ici, c'est que le process a fini à temps.
-            # On attend qu'il se ferme proprement.
-            p.join(timeout=0.1)
-            
-            if status == "ERR":
-                raise payload  # On relève l'exception d'origine (ex: gaierror)
-            return payload
-
-        except queue.Empty:
-            # TIMEOUT ATTEINT
-            p.terminate()  # Arrêt brutal du processus
-            p.join()       # Nettoyage des ressources
-            raise TimeoutError(f"Process execution timed out after {timeout}s")
-            
-    # On 'yield' la fonction qui permet d'exécuter le code
-    yield run_in_process
-
-@njit()
-def optiget_priority_queue(get_priority, queue): 
-    return min((get_priority(netloc), date, tie_breaker, idx) for idx, (date, _, tie_breaker, netloc) in enumerate(queue))
-
 class PriorityQueue:
-    def __init__(self, get_priority: Callable[[str], float]):
-        self._queue = List.empty_type(Tuple[numba.types.float64, numba.types.unicode_type])
+    def __init__(self):
         self._lock = threading.Lock()
-        self._get_priority = get_priority
+        self._no_empty = threading.Condition(self._lock)
+        
+        self._heap: list[tuple[int, str]] = [] # type: ignore
+        self._backlog: defaultdict[str, list[tuple[int, int, str]]] = defaultdict(list) # type: ignore
+        self._domain_in_backlog: set[str] = set() # type: ignore
         
     def put(self, items: tuple|list[tuple]):
+        """Entrée attendue : (next_domain_crawl_time, last_url_crawled_time, url)"""
         with self._lock:
             if isinstance(items, tuple):
-                items = (*items, increment_tie_breaker(), urlparse(items[1]).netloc)
-                self._queue.append(items)
-            else:
-                items = [(*item, increment_tie_breaker(), urlparse(item[1]).netloc) for item in items]
-                self._queue.extend(items)
-    
+                items = [items]
+            
+            now = int(time.time())
+            for item in items:
+                url = item[2]
+                domain = urlparse(url).netloc
+                
+                heapq.heappush(self._backlog[domain], item[1:])
+
+                if domain not in self._domain_in_backlog:
+                    heapq.heappush(self._heap, (item[0], domain))
+                    self._domain_in_backlog.add(domain)
+        self._no_empty.notify()
+
     def get(self):
         with self._lock:
-            _, _, _, min_index = optiget_priority_queue(self._get_priority, self._queue)
-            return self._queue.pop(min_index)[:-2]
-    
-    def empty(self):
+            while True:
+                now = int(time.time())
+                if not self._heap:
+                    self._no_empty.wait()
+                    continue
+
+                next_domain_crawl_time, domain = self._heap.pop(0)
+                if next_domain_crawl_time > now:
+                    self._no_empty.wait(timeout=next_domain_crawl_time - now)
+                    continue
+
+                heapq.heappop(self._heap)
+
+                if self._backlog[domain]:
+                    item = heapq.heappop(self._backlog[domain])
+                    if self._backlog[domain]:
+                        heapq.heappush(self._heap, (now, domain))
+                    else:
+                        self._domain_in_backlog.remove(domain)
+                    return item
+                else:
+                    self._domain_in_backlog.remove(domain)
+                    continue
+                
+    def qsize(self):
         with self._lock:
-            return len(self._queue) == 0
+            return sum(len(queue) for queue in self._backlog.values())
 
 class AutoBackupManager(threading.Thread):
     def __init__(self, db: Sqlite3Worker, stop_event: threading.Event, database_reorganize_event: threading.Event, database_ready_reorganize_event: threading.Event):
@@ -348,14 +309,14 @@ class QueueRecharger(threading.Thread):
                     traceback_logger.error(traceback.format_exc())
 
     def recharge_queue(self):  # sourcery skip: identity-comprehension
-        urls = [(date, url, id) for url, date, id in self.db.execute("SELECT url, date, id FROM waiting_list ORDER BY domain_date ASC, date ASC LIMIT ?", (1000 - self.queue.qsize(),))]
-        ids = [url[2] for url in urls]
+        urls = [(url, last_crawled_time, next_domain_crawl_time, id) for url, last_crawled_time, next_domain_crawl_time, id in self.db.execute("SELECT url, last_crawled_time, next_domain_crawl_time, id FROM waiting_list ORDER BY next_domain_crawl_time ASC, last_crawled_time ASC LIMIT ?", (1000 - self.queue.qsize(),))]
+        ids = [url[3] for url in urls]
 
-        self.queue.put([(url[0], url[1]) for url in urls])
+        self.queue.put([(url[2], url[1], url[0]) for url in urls])
         self.db.execute(f"DELETE FROM waiting_list WHERE id IN ({','.join('?' for _ in ids)})", ids)
 
 class Crawler(threading.Thread):
-    def __init__(self, queue: PriorityQueue, stop_event: threading.Event, id: int, domain_crawl_time, domain_crawl_time_lock: threading.Lock, crawled_urls_bf, database_reorganize_event: threading.Event, database_ready_reorganize_event: threading.Event):
+    def __init__(self, queue: PriorityQueue, stop_event: threading.Event, id: int, domain_crawl_time, domain_crawl_time_lock: threading.Lock, crawled_urls_bf, database_reorganize_event: threading.Event, database_ready_reorganize_event: threading.Event, remove_params: list[str]):
         threading.Thread.__init__(self)
         self.db = db
         self.queue = queue
@@ -368,21 +329,41 @@ class Crawler(threading.Thread):
         self.database_reorganize_event = database_reorganize_event
         self.database_ready_reorganize_event = database_ready_reorganize_event
         self.crawler_id = id
+        self.remove_params = remove_params
 
     def get_pure_url(self, url: str) -> str:
-        """
-        Obtient la version pure d'une URL, sans les paramètres de requête et le fragment.
-
-        Args:
-            url: L'URL à nettoyer.
-
-        Returns:
-            L'URL pure.
-        """
-        parsed_url = urlparse(url)
-        return urlunparse(
-            (parsed_url.scheme, parsed_url.netloc, parsed_url.path, '', '', '')
-        )
+        # 1. Analyser l'URL
+        parsed = urlparse(url)
+        
+        # 2. Normaliser le schéma et le netloc (domaine) en minuscules
+        scheme = parsed.scheme.lower()
+        netloc = parsed.netloc.lower()
+        
+        # 3. Traiter les paramètres (Query String)
+        # parse_qsl transforme "a=1&b=2" en [('a', '1'), ('b', '2')]
+        query_params = parse_qsl(parsed.query, keep_blank_values=True)
+        
+        # Filtrer les paramètres inutiles et Trier
+        filtered_params = []
+        for key, value in query_params:
+            if key.lower() not in self.remove_params:
+                filtered_params.append((key, value))
+        
+        # Le tri est crucial : ?a=1&b=2 devient identique à ?b=2&a=1
+        filtered_params.sort()
+        
+        # Reconstruire la query string
+        new_query = urlencode(filtered_params)
+        
+        # 4. Reconstruire l'URL sans le fragment ('')
+        # Structure: scheme, netloc, path, params, query, fragment
+        clean_url = urlunparse((scheme, netloc, parsed.path, parsed.params, new_query, ''))
+        
+        # Optionnel : retirer le slash final si ce n'est pas la racine
+        if clean_url.endswith('/') and len(parsed.path) > 1:
+            clean_url = clean_url[:-1]
+            
+        return clean_url
 
     @lru_cache(maxsize=10_000)
     def is_resolvable(self, domain: str) -> bool:
@@ -396,8 +377,8 @@ class Crawler(threading.Thread):
             True si le domaine est résolvable, False sinon.
         """
         try:
-            with timeout_manager(5) as execute:
-                execute(socket.gethostbyname, domain)
+            socket.setdefaulttimeout(5)
+            socket.gethostbyname(domain)
             return True
         except socket.gaierror:
             return False
@@ -533,22 +514,16 @@ class Crawler(threading.Thread):
         # separator=' ' ajoute un espace entre les blocs de texte pour une meilleure lisibilité
         return main_element.text(strip=True, separator=' ')
 
-    def insert_urls_in_waiting_list(self, urls: set[str]):
+    def insert_urls_in_waiting_list(self, urls: dict[str, float]):
         self.crawled_urls_bf.update(urls)
-
-        url_domains_last_crawled_time = {}
-        for url in urls:
-            parsed = urlparse(url)
-            domain = parsed.netloc
-            last_crawled_time = self.domain_crawl_time.get(domain, 0)
-            url_domains_last_crawled_time[url] = last_crawled_time
             
-        for url, last_crawled_time in url_domains_last_crawled_time.items():
-            self.db.execute("INSERT INTO temp_waiting_list (url, domain, date) VALUES (?, ?, ?)", (url, domain, int(time.time())))
+        with self.domain_crawl_time_lock:
+            for url, last_crawled_time in urls.items():
+                self.db.execute("INSERT INTO temp_waiting_list (url, domain, last_crawled_time, next_domain_crawl_time) VALUES (?, ?, ?, ?)", (url, urlparse(url).netloc, int(last_crawled_time), self.domain_crawl_time.get(urlparse(url).netloc, 0) + self.get_domain_crawl_delay(url)))
 
         
-        self.db.execute("""INSERT OR IGNORE INTO waiting_list (url, domain, date)
-                            SELECT t.url, t.domain, t.date
+        self.db.execute("""INSERT OR IGNORE INTO waiting_list (url, domain, last_crawled_time, next_domain_crawl_time)
+                            SELECT t.url, t.domain, t.last_crawled_time, t.next_domain_crawl_time
                             FROM temp_waiting_list t
                             WHERE NOT EXISTS (
                                 SELECT 1
@@ -557,7 +532,11 @@ class Crawler(threading.Thread):
                             )""")
         self.db.execute("DELETE FROM temp_waiting_list")
 
-    def crawl(self, url: str, session: requests.Session) -> tuple[Optional[str], Optional[str], Optional[set[str]], bool]:
+    def get_domain_crawl_delay(self, url: str) -> float:
+        self.read_robots_txt(urlparse(url), url)
+        return self.robot_parser.crawl_delay("*") if self.robot_parser.crawl_delay("*") else WAITING_DELAY # type: ignore
+
+    def crawl(self, url: str, session: requests.Session) -> tuple[Optional[str], Optional[str], Optional[dict[str, float]], bool]:
         # sourcery skip: de-morgan
         """
         Crawle une URL et retourne le titre, le contenu et les liens.
@@ -600,7 +579,7 @@ class Crawler(threading.Thread):
                     try:
                         start_time = time.time()
                         # Requête GET pour obtenir le contenu de la page
-                        response = requests.get(url, headers=headers, timeout=5, allow_redirects=False)
+                        response = session.get(url, headers=headers, timeout=5, allow_redirects=False)
                         response.raise_for_status() # Si une erreur HTTP est déclenchée, on relève l'exception
                         crawler_logger.info(f"Get {url} in {time.time() - start_time} seconds")
                     except requests.exceptions.RequestException as e:
@@ -617,17 +596,21 @@ class Crawler(threading.Thread):
                     
                     # Récupération du titre et du contenu de la page
                     title = tree.css_first("title").text() if tree.css_first("title") else "Sans titre" # type: ignore
-                    content = self.extract_main_content(tree)
-                    
+
                     try:
                         # Récupération des liens de la page
+                        now = time.time()
                         links = {link.attributes.get("href") for link in tree.css("a") if link.attributes.get("href")}
                         links = {urljoin(url, link) for link in links if urlparse(link).scheme in ["http", "https", ""]}
                         links = {self.get_pure_url(link) for link in links if link}
+                        links = {link: now for link in links} # type: ignore
+
                     except (AttributeError, KeyError) as e:
                         # Si une erreur d'attribut est déclenchée, on relève l'exception
                         crawler_logger.error(f"Error while getting links for {url}: {e}")
                         links = set()
+
+                    content = self.extract_main_content(tree)
 
                     # Retourne le titre, le contenu et les liens de la page
                     crawler_logger.info(f"Crawled page : {url}")
@@ -675,55 +658,14 @@ class Crawler(threading.Thread):
                         continue
 
                     # Récupération d'une page à crawler
-                    scheduled_time, url = self.queue.get()
+                    _, _, url = self.queue.get()
                     crawler_logger.info(f"Get {url} in the queue")
                     
-                    # Préparsing de l'URL et extraction du domaine
-                    parsed_url = urlparse(url)
-                    domain = parsed_url.netloc
-
                     # Vérification si la page a déjà été crawlée
                     if self.url_is_crawled(url):
                         crawler_logger.info(f"{url} is already crawled")
                         continue
-
-                    # Vérification du délai de crawling
-                    crawler_logger.info("Checking a crawl delay for URL...")
-                    start_time = time.time()
-                    if (current_time := int(time.time())) < scheduled_time:
-                        self.queue.put((scheduled_time, url))
-                        crawler_logger.info(f"{url} is not ready to be crawled yet. Wait for {scheduled_time - current_time} ms")
-                        time.sleep(0.5) # Petite pause pour éviter de surcharger le CPU
-                        continue
-                    crawler_logger.info(f"Sucess checking the crawl delay for URL in {time.time() - start_time} seconds.")
-
-                    # Vérification du délai de crawling par domaine
-                    crawler_logger.info(f"Checking a crawl delay by domain for url {url}...")
-                    start_time = time.time()
-                    with self.domain_crawl_time_lock:
-                        # Lecture du robots.txt
-                        is_restricted = self.read_robots_txt(parsed_url, url)
-
-                        # On récupère le délai de crawling depuis le robots.txt, sinon on utilise le délai par défaut
-                        delay_from_robots = self.robot_parser.crawl_delay("*")
-                        crawl_delay = float(delay_from_robots) if is_restricted and delay_from_robots is not None else WAITING_DELAY
-
-                        # On récupère la date du dernier crawl pour le domaine
-                        last_crawled_time = self.domain_crawl_time.get(domain, 0)
-
-                        next_crawl_time = last_crawled_time + crawl_delay
-                        
-                        if time.time() < next_crawl_time:
-                            self.queue.put((next_crawl_time, url))
-                            crawler_logger.info(f"{url} is not ready to be crawled yet. Wait for {next_crawl_time - time.time()} ms")
-                            time.sleep(0.5) # Petite pause pour éviter de surcharger le CPU
-                            continue
-
-                        # Mise à jour de la date du dernier crawl pour le domaine
-                        self.domain_crawl_time[domain] = time.time()
-                    crawler_logger.info(f"Sucess checking the crawl delay by domain for url {url} in {time.time() - start_time} seconds.")
                     
-
                     # Nettoyer l'URL
                     url = self.get_pure_url(url)
 
@@ -732,7 +674,7 @@ class Crawler(threading.Thread):
                     try:
                         start_time = time.time()
                         title, content, links, success = self.crawl(url, session)
-                        links = links or set()
+                        links = links or dict()
                         if success:
                             self.db.execute("INSERT INTO crawled_urls (url) VALUES (?)", (url,))
                     except Exception as e:
@@ -774,26 +716,22 @@ def main():
     stop_event = threading.Event()
     database_reorganize_event = threading.Event()
     database_ready_reorganize_event = [threading.Event() for _ in range(NUM_CRAWLERS + 2)]
-    domain_crawl_time = Dict.empty(key_type=numba.types.unicode_type, value_type=numba.types.float64)
+    domain_crawl_time = {}
     domain_crawl_time_lock = threading.Lock()
 
-    @njit
-    def get_priority(domain: str) -> int:
-        return domain_crawl_time.get(domain, 0)
+    remove_params = [
+        'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+        'gclid', 'fbclid', 'ref', 'source', 'yclid', '_ga'
+    ]
     
-    queue: PriorityQueue[tuple[float, str, int]] = PriorityQueue(get_priority) # type: ignore
+    queue: PriorityQueue[tuple[float, str, int]] = PriorityQueue() # type: ignore
 
-    # chargement des urls de départ
-    for date, url, id in db.execute("SELECT url, date, id FROM waiting_list ORDER BY date ASC LIMIT 1000"):
-        queue.put((url, date, id))
-        db.execute("DELETE FROM waiting_list WHERE id = ?", (id,))
-
-    """with open("other_start_urls2.json", "r") as f:
+    with open("other_start_urls2.json", "r") as f:
         for id, url in enumerate(json.load(f)):
-            queue.put((time.time(), url, id))"""
+            queue.put((time.time(), time.time(), url))
     
     for thread_id in range(NUM_CRAWLERS):
-        crawler = Crawler(queue, stop_event, thread_id, domain_crawl_time, domain_crawl_time_lock, crawled_urls_bf, database_reorganize_event, database_ready_reorganize_event)
+        crawler = Crawler(queue, stop_event, thread_id, domain_crawl_time, domain_crawl_time_lock, crawled_urls_bf, database_reorganize_event, database_ready_reorganize_event, remove_params)
         crawler.start()
         crawlers.append(crawler)
 
@@ -821,7 +759,7 @@ def main():
         cache.clear()
         cache.close()
     
-    crawler_logger.info("All crawlers finished")
+    crawler_logger.info("All crawler finished")
 
 if __name__ == "__main__":
     main()

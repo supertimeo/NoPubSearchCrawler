@@ -32,7 +32,7 @@ from sqlalchemy.orm import scoped_session, sessionmaker, \
 from watchdog.events import FileSystemEventHandler, DirMovedEvent, FileMovedEvent
 from watchdog.observers import Observer
 
-from src.crawlers.crawler_config import CrawlerConfig
+from src.crawler.crawler_config import CrawlerConfig
 from src.database.model import URL, WaitingURL, CrawledURL, Page, Link, Base
 from .errors import NetworkError, CrawlError, InitializationError, DatabaseError, \
     MissingEnvironmentVariableError
@@ -569,7 +569,7 @@ def init_db(args: Namespace) -> tuple[Engine, scoped_session[ASession]]:
 
     engine = create_engine(
         db_url,
-        pool_size=20,  # Assez de connexions pour tes 15 crawlers + tes threads de fond
+        pool_size=20,  # Assez de connexions pour tes 15 crawler + tes threads de fond
         max_overflow=10  # Une petite marge de sécurité
     )
 
@@ -694,9 +694,9 @@ def main():
     with logger.catch(level=LoggingLevels.FATAL, message="Initialization failed !", onerror=lambda _: sys.exit(-1)):
         engine, Session, cache, crawled_urls_bf, crawled_urls_bf_lock, queue = init()
 
-    logger.info("Launching crawlers...")
+    logger.info("Launching crawler...")
     start_time = time.time()
-    with logger.catch(level=LoggingLevels.FATAL, message="Launching crawlers failed", onerror=lambda _: sys.exit(-1)):
+    with logger.catch(level=LoggingLevels.FATAL, message="Launching crawler failed", onerror=lambda _: sys.exit(-1)):
         for thread_id in range(config.num_crawlers):
             crawler = Crawler(queue, Session, cache, stop_event, thread_id, crawling_urls, crawling_urls_lock, domain_crawl_time, domain_crawl_time_lock, crawled_urls_bf, remove_params, crawled_urls_bf_lock)
             crawler.start()
@@ -721,7 +721,7 @@ def main():
         t.join()
     queue_recharger.join()
 
-    logger.info("All crawlers finished")
+    logger.info("All crawler finished")
 
 if __name__ == "__main__":
     main()

@@ -19,7 +19,7 @@ uv run ruff check . --fix          # Fix linting issues
 uv run ruff format .               # Format code
 
 # Run the application
-uv run python -m src.crawlers.crawlers
+uv run python -m src.crawler.crawler
 
 # Run tests (test suite exists but is empty)
 uv run pytest
