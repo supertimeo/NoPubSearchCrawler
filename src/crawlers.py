@@ -325,7 +325,8 @@ class RobotsTxtManager(Manager):
             response = self.network_manager.fetch_page(robots_txt_url)
         except NetworkError as e:
             self.logger.debug(f"Error while fetching robots.txt for {robots_txt_url}: {e}")
-            if not e.retryable: self.cache[netloc] = None
+            if not e.retryable:
+                self.cache[netloc] = None
             return None
 
         robots_txt = response.text
@@ -338,7 +339,8 @@ class RobotsTxtManager(Manager):
         parsed_url = urlparse(url) if isinstance(url, str) else url
 
         robots_txt = self.get_robots_txt(parsed_url)
-        if robots_txt is None: return None
+        if robots_txt is None:
+            return None
 
         if parsed_url.netloc not in self.parser_dict:
             self.parser_dict[parsed_url.netloc] = Protego.parse(robots_txt)
@@ -347,12 +349,14 @@ class RobotsTxtManager(Manager):
     @lru_cache(maxsize=10_000)
     def get_crawl_delay(self, url: str | ParseResult) -> float:
         parser = self.get_parser(url)
-        if parser is None: return WAITING_DELAY
+        if parser is None:
+            return WAITING_DELAY
         return min(parser.crawl_delay("*") or WAITING_DELAY, 60)
 
     def is_allowed(self, url: str) -> bool:
         parser = self.get_parser(url)
-        if parser is None: return True
+        if parser is None:
+            return True
         return parser.can_fetch(url, "*")
 
 
@@ -383,9 +387,11 @@ class QueueRecharger(threading.Thread):
             urls = session.execute(select(URL.url, WaitingURL.domain_crawled_at, WaitingURL.id).join(WaitingURL.url).order_by(WaitingURL.domain_crawled_at.asc()).limit(1000 - self.queue.qsize())).all()
         ids = [url[2] for url in urls]
 
-        if not ids: return
+        if not ids:
+            return
 
-        for url in urls : self.queue.put((url[1], url[0]))
+        for url in urls:
+            self.queue.put((url[1], url[0]))
         with self.Session() as session, self.logger.catch(message="Error while recharging the queue", onerror=lambda _: session.rollback()):
             session.execute(delete(WaitingURL).where(WaitingURL.id.in_(ids)))
             session.commit()
@@ -422,7 +428,8 @@ class Crawler(threading.Thread):
         with self.Session() as session:
             try:
                 yield session
-                if autocommit: session.commit()
+                if autocommit:
+                    session.commit()
             except Exception as e:
                 session.rollback()
                 raise DatabaseError("An error occurred while inserting a URL in database") from e
@@ -654,7 +661,8 @@ class Crawler(threading.Thread):
 
             while not self.stop_event.is_set():
                 # Récupération d'une page à crawler
-                if self.queue.empty(): continue
+                if self.queue.empty():
+                    continue
                 domain_crawled_at, url = self.queue.get()
                 self.logger.trace(f"Get {url} in the queue")
 
