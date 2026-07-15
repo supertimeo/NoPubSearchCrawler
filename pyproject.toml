@@ -27,7 +27,8 @@ dev = [
 
 [tool.deptry]
 exclude = [
-    "src/backups"
+    "src/crawlers/backups",
+    ".venv"
 ]
 
 [tool.deptry.per_rule_ignores]
