@@ -57,7 +57,7 @@ load_dotenv()
 WAITING_DELAY = 5
 NUM_CRAWLERS = 15
 
-root_folder_path = Path(__file__).parent.parent
+root_folder_path = Path(__file__).parent.parent.parent
 log_folder_path = root_folder_path / "logs"
 cache_folder_path = root_folder_path / "caches"
 backup_folder_path = root_folder_path / "backups"
@@ -498,15 +498,15 @@ def init_logger(args: argparse.Namespace):
 
     def log_location_patcher(record: Record):
         class_name = record["extra"].get("class_name")
-        record["extra"][
-            "location"] = f"{record['file'].name}{f":{class_name}" if class_name is not None else ""}{f":{record['function']}" if record['function'] != "<module>" else ""}:{record['line']}"
+        record["extra"]["location"] = f"{record['file'].name}{f":{class_name}" if class_name is not None else ""}{f":{record['function']}" if record['function'] != "<module>" else ""}:{record['line']}"
+        record["extra"]["thread_info"] = f"{record["thread"].name} ({record["thread"].id})"
 
     def log_format(record: Record) -> str:
         return (
             "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
             "<level>{level: <8}</level> | "
-            f"{record["extra"]["location"]} | "
-            "{thread.name} ({thread.id}) - "
+            "{extra[location]: <50} | "
+            "{extra[thread_info]: <20} - "
             "{message}\n"
             "{exception}"
         )
