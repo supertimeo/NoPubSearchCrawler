@@ -20,7 +20,7 @@ class InitializationError(Exception):
     pass
 
 
-class ConfigurationError(InitializationError):
+class ConfigurationError(InitializationError, ValueError):
     """Base class for configuration related failures."""
 
 

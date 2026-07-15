@@ -9,21 +9,21 @@ from diskcache import Cache
 from loguru import logger
 from protego import Protego
 
+from .crawler_config import CrawlerConfig
 from .errors import NetworkError
-
-WAITING_DELAY = 5
 
 class Manager:
     pass
 
 
 class NetworkManager(Manager):
-    def __init__(self):
+    def __init__(self, config: CrawlerConfig):
         self.session = requests.Session()
+        self.config = config
 
     def fetch_page(self, url):
         try:
-            response = self.session.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"}, timeout=5, allow_redirects=False)
+            response = self.session.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"}, timeout=self.config.network.timeout, allow_redirects=self.config.network.allow_redirects)
             response.raise_for_status()
 
         except requests.Timeout as e:
@@ -70,9 +70,8 @@ class NetworkManager(Manager):
 
         return response
 
-    @staticmethod
     @lru_cache(maxsize=10_000)
-    def is_resolvable(domain: str) -> bool:
+    def is_resolvable(self, domain: str) -> bool:
         """
         Vérifie si un domaine est résolvable en tentant d'obtenir son adresse IP.
 
@@ -83,7 +82,7 @@ class NetworkManager(Manager):
             True si le domaine est résolvable, False sinon.
         """
         try:
-            socket.setdefaulttimeout(5)
+            socket.setdefaulttimeout(self.config.network.timeout)
             socket.gethostbyname(domain)
             return True
         except socket.gaierror:
@@ -95,9 +94,11 @@ class NetworkManager(Manager):
 
 
 class RobotsTxtManager(Manager):
-    def __init__(self, cache: Cache, network_manager: NetworkManager):
+    def __init__(self, cache: Cache, network_manager: NetworkManager, config: CrawlerConfig):
         self.cache = cache
         self.parser_dict: dict[str, Protego] = {}
+
+        self.config = config
 
         self.logger = logger.bind(class_name=self.__class__.__name__)
 
@@ -153,8 +154,8 @@ class RobotsTxtManager(Manager):
     def get_crawl_delay(self, url: str | ParseResult) -> float:
         parser = self.get_parser(url)
         if parser is None:
-            return WAITING_DELAY
-        return min(parser.crawl_delay("*") or WAITING_DELAY, 60)
+            return self.config.network.default_waiting_delay
+        return min(parser.crawl_delay("*") or self.config.network.default_waiting_delay, self.config.network.max_waiting_delay)
 
     def is_allowed(self, url: str) -> bool:
         parser = self.get_parser(url)

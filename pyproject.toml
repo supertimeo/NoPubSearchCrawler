@@ -11,11 +11,13 @@ dependencies = [
     "psycopg[binary]>=3.3.4",
     "pydantic>=2.13.4",
     "python-dotenv>=1.2.2",
+    "pyyaml>=6.0.3",
     "rbloom>=1.5.4",
     "requests>=2.34.2",
     "selectolax>=0.4.10",
     "sqlalchemy>=2.0.51",
     "urllib3>=2.7.0",
+    "watchdog>=6.0.0",
 ]
 
 [dependency-groups]

@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
 from queue import PriorityQueue
-from typing import TYPE_CHECKING, cast, Generator
+from typing import TYPE_CHECKING, cast, Generator, Final
 from urllib.parse import urlparse, urljoin, urlunparse, parse_qsl, urlencode, unquote
 
 # import pour le scraping et le crawling
@@ -29,7 +29,10 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import URL as DB_URL
 from sqlalchemy.orm import scoped_session, sessionmaker, \
     Session as ASession
+from watchdog.events import FileSystemEventHandler, DirMovedEvent, FileMovedEvent
+from watchdog.observers import Observer
 
+from src.crawlers.crawler_config import CrawlerConfig
 from src.database.model import URL, WaitingURL, CrawledURL, Page, Link, Base
 from .errors import NetworkError, CrawlError, InitializationError, DatabaseError, \
     MissingEnvironmentVariableError
@@ -54,14 +57,12 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 load_dotenv()
 
-WAITING_DELAY = 5
-NUM_CRAWLERS = 15
-
-root_folder_path = Path(__file__).parent.parent.parent
-log_folder_path = root_folder_path / "logs"
-cache_folder_path = root_folder_path / "caches"
-backup_folder_path = root_folder_path / "backups"
-assets_folder_path = root_folder_path / "assets"
+root_folder_path: Final[Path] = Path(__file__).resolve().parent.parent.parent
+log_folder_path: Final[Path] = root_folder_path / "logs"
+cache_folder_path: Final[Path] = root_folder_path / "caches"
+backup_folder_path: Final[Path] = root_folder_path / "backups"
+assets_folder_path: Final[Path] = root_folder_path / "assets"
+config_file_path: Final[Path] = root_folder_path / "configs" / "crawler_config.yaml"
 
 class FixedList[T]:
     def __init__(self, size: int, value: T):
@@ -96,13 +97,26 @@ class LoggingLevels(StrEnum):
     FATAL = "FATAL"
 
 
+class ConfigFileEventHandler(FileSystemEventHandler):
+    def __init__(self, crawlers: list[Crawler], queue_recharger: QueueRecharger):
+        self.crawlers = crawlers
+        self.queue_recharger = queue_recharger
+    def on_moved(self, event: DirMovedEvent | FileMovedEvent) -> None:
+        if Path(cast(str, event.src_path)).resolve() == config_file_path:
+            new_config = CrawlerConfig.load_from_yml(config_file_path)
+            self.queue_recharger.set_config(new_config)
+            for crawler in self.crawlers:
+                crawler.set_config(new_config)
+
+
 class QueueRecharger(threading.Thread):
     def __init__(self, queue: PriorityQueue[tuple[float, str]], Session: scoped_session[ASession], stop_event: threading.Event):
         threading.Thread.__init__(self)
         self.Session = Session
         self.queue = queue
         self.stop_event = stop_event
-        self.id = NUM_CRAWLERS + 1
+        self.config = CrawlerConfig.load_from_yml(config_file_path)
+        self.id = self.config.num_crawlers + 1
 
         self.logger = logger.bind(class_name=self.__class__.__name__)
 
@@ -110,7 +124,7 @@ class QueueRecharger(threading.Thread):
         with self.logger.catch(level=LoggingLevels.CRITICAL, message=f"A fatal error an occured while running the running loop of the QueueRecharger {self.name} ({self.native_id})"):
             self.logger.info("QueueRecharger started.")
             while not self.stop_event.is_set():
-                if self.queue.qsize() < 200:
+                if self.queue.qsize() < self.config.min_queue_size:
                     time.sleep(10)
                     with self.logger.catch(message="Error while recharging the queue"):
                         self.logger.debug("Recharging the queue...")
@@ -132,6 +146,9 @@ class QueueRecharger(threading.Thread):
             session.execute(delete(WaitingURL).where(WaitingURL.id.in_(ids)))
             session.commit()
 
+    def set_config(self, config: CrawlerConfig):
+        self.config = config
+
 
 class Crawler(threading.Thread):
     def __init__(self, queue: PriorityQueue[tuple[float, str]], Session: scoped_session[ASession],
@@ -151,13 +168,18 @@ class Crawler(threading.Thread):
         self.crawler_id = id
         self.remove_params = remove_params
         self.cache = cache
+        
+        self.config = CrawlerConfig.load_from_yml(config_file_path)
 
         self.crawled_urls_bf_lock = crawled_urls_bf_lock
 
         self.logger = logger.bind(class_name=self.__class__.__name__)
 
-        self.network_manager = NetworkManager()
-        self.robots_txt_manager = RobotsTxtManager(self.cache, self.network_manager)
+        self.network_manager = NetworkManager(self.config)
+        self.robots_txt_manager = RobotsTxtManager(self.cache, self.network_manager, self.config)
+
+    def set_config(self, config: CrawlerConfig):
+        self.config = config
 
     @contextmanager
     def db_transaction(self, autocommit: bool = False) -> Generator[ASession]:
@@ -302,7 +324,7 @@ class Crawler(threading.Thread):
 
         # Vérification si l'URL est résolvable
         try:
-            if not NetworkManager.is_resolvable(netloc):
+            if not self.network_manager.is_resolvable(netloc):
                 self.logger.debug(f"URL {url} is not crawlable because it's not resolvable")
                 return False
         except NetworkError as e:
@@ -501,7 +523,7 @@ def init_logger(args: argparse.Namespace):
         record["extra"]["location"] = f"{record['file'].name}{f":{class_name}" if class_name is not None else ""}{f":{record['function']}" if record['function'] != "<module>" else ""}:{record['line']}"
         record["extra"]["thread_info"] = f"{record["thread"].name} ({record["thread"].id})"
 
-    def log_format(record: Record) -> str:
+    def log_format(_record: Record) -> str:
         return (
             "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
             "<level>{level: <8}</level> | "
@@ -598,6 +620,12 @@ def init_cache(args: Namespace) -> Cache:
         cache_folder_path.mkdir()
     return Cache(str(cache_folder_path / "robot_txts_cache"))
 
+def init_config(crawlers: list[Crawler], queue_recharger: QueueRecharger):
+    observer = Observer()
+    observer.schedule(ConfigFileEventHandler(crawlers, queue_recharger), path=".", recursive=False)
+
+    observer.start()
+
 def init() -> tuple[Engine, scoped_session[ASession], Cache, Bloom, threading.Lock, PriorityQueue[tuple[float, str]]]:
     args = parsing_arguments()
 
@@ -650,10 +678,12 @@ def init() -> tuple[Engine, scoped_session[ASession], Cache, Bloom, threading.Lo
 def main():
     # création des threads
     crawlers = []
+    config = CrawlerConfig.load_from_yml(config_file_path)
+    print(config)
     stop_event = threading.Event()
     domain_crawl_time = {}
     domain_crawl_time_lock = threading.Lock()
-    crawling_urls = FixedList(NUM_CRAWLERS, "")
+    crawling_urls = FixedList(config.num_crawlers, "")
     crawling_urls_lock = threading.Lock()
 
     remove_params = [
@@ -667,14 +697,16 @@ def main():
     logger.info("Launching crawlers...")
     start_time = time.time()
     with logger.catch(level=LoggingLevels.FATAL, message="Launching crawlers failed", onerror=lambda _: sys.exit(-1)):
-        for thread_id in range(NUM_CRAWLERS):
+        for thread_id in range(config.num_crawlers):
             crawler = Crawler(queue, Session, cache, stop_event, thread_id, crawling_urls, crawling_urls_lock, domain_crawl_time, domain_crawl_time_lock, crawled_urls_bf, remove_params, crawled_urls_bf_lock)
             crawler.start()
             crawlers.append(crawler)
     logger.success(f"Crawlers initialized successfully in {time.time() - start_time}")
 
-    recharger = QueueRecharger(queue, Session, stop_event)
-    recharger.start()
+    queue_recharger = QueueRecharger(queue, Session, stop_event)
+    queue_recharger.start()
+
+    init_config(crawlers, queue_recharger)
 
     while True:
         # noinspection PyBroadException
@@ -687,7 +719,7 @@ def main():
     # attente de la fin des threads
     for t in crawlers:
         t.join()
-    recharger.join()
+    queue_recharger.join()
 
     logger.info("All crawlers finished")
 
