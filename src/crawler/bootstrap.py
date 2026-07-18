@@ -26,7 +26,7 @@ from src.common.paths import assets_folder_path, backup_folder_path, cache_folde
 from src.configs.crawler_config import CrawlerConfig
 from src.database.model import URL, CrawledURL
 from src.database.session import create_db_engine, create_session_factory, init_schema
-from .engine import Crawler, ConfigFileEventHandler, FixedList, QueueRecharger
+from .engine import Crawler, ConfigFileEventHandler, ThreadLocalURLTracker, QueueRecharger
 from .log_levels import LoggingLevels
 
 
@@ -63,21 +63,21 @@ def init_db(args: Namespace) -> tuple[Engine, scoped_session[ASession]]:
     start_time = time.time()
 
     engine = create_db_engine()
-    Session = create_session_factory(engine)
+    session_factory = create_session_factory(engine)
 
     init_schema(engine, drop_existing=args.delete_db or args.delete_all)
 
     logger.success(f"Database initialized successfully in {time.time() - start_time}")
 
-    return engine, Session
+    return engine, session_factory
 
 
-def init_bloom_filter(Session: scoped_session[ASession]) -> tuple[Bloom, threading.Lock]:
+def init_bloom_filter(session_factory: scoped_session[ASession]) -> tuple[Bloom, threading.Lock]:
     logger.info("Initializing crawled url bloom-filter...")
     start_time = time.time()
 
     crawled_urls_bf = Bloom(100_000, 0.001)
-    with Session() as session:
+    with session_factory() as session:
         crawled_urls_bf.update(set(session.execute(select(URL.url).join(CrawledURL.url)).all()))
     crawled_urls_bf_lock = threading.Lock()
 
@@ -119,12 +119,12 @@ def build_dependencies(args: Namespace, cache: Cache | None = None) -> CrawlerDe
     backup_folder_path.mkdir(parents=True, exist_ok=True)
 
     try:
-        engine, Session = init_db(args)
+        engine, session_factory = init_db(args)
     except Exception as e:
         raise InitializationError("Failed to initialize database") from e
 
     try:
-        crawled_urls_bf, crawled_urls_bf_lock = init_bloom_filter(Session)
+        crawled_urls_bf, crawled_urls_bf_lock = init_bloom_filter(session_factory)
     except Exception as e:
         raise InitializationError("Failed to initialize bloom filter") from e
 
@@ -139,7 +139,7 @@ def build_dependencies(args: Namespace, cache: Cache | None = None) -> CrawlerDe
         except Exception as e:
             raise InitializationError("Failed to initialize cache") from e
 
-    return CrawlerDependencies(engine, Session, cache, crawled_urls_bf, crawled_urls_bf_lock, queue)
+    return CrawlerDependencies(engine, session_factory, cache, crawled_urls_bf, crawled_urls_bf_lock, queue)
 
 @overload
 def launch_crawler(args: Namespace, stop_events: list[threading.Event], pause_events: list[threading.Event], cache: Cache | None, return_crawlers: Literal[False]) -> None: ...
@@ -153,7 +153,7 @@ def launch_crawler(args: Namespace, stop_events: list[threading.Event], pause_ev
     config = CrawlerConfig.load_from_yml(crawler_config_file_path)
     domain_crawl_time = {}
     domain_crawl_time_lock = threading.Lock()
-    crawling_urls = FixedList(config.num_crawlers, "")
+    crawling_urls = ThreadLocalURLTracker(config.num_crawlers, "")
     crawling_urls_lock = threading.Lock()
 
     remove_params = [
@@ -194,5 +194,5 @@ def launch_crawler(args: Namespace, stop_events: list[threading.Event], pause_ev
     observer.stop()
     observer.join()
 
-    logger.success("All crawler finished sucessfully!")
+    logger.success("All crawlers finished successfully!")
     return None

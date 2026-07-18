@@ -12,11 +12,11 @@ from protego import Protego
 from src.configs.crawler_config import CrawlerConfig
 from .errors import NetworkError
 
-class Manager:
+class BaseDomainManager:
     pass
 
 
-class NetworkManager(Manager):
+class NetworkManager(BaseDomainManager):
     def __init__(self, config: CrawlerConfig):
         self.session = requests.Session()
         self.config = config
@@ -37,25 +37,25 @@ class NetworkManager(Manager):
 
         except requests.exceptions.HTTPError as e:
             if not e.response:
-                raise NetworkError(f"HTTP error while fetching {url})") from e
+                raise NetworkError(f"HTTP error while fetching {url}") from e
 
             status_code = e.response.status_code
 
             match status_code:
                 case 400:
-                    raise NetworkError(f"Bad request {url}") from e
+                    raise NetworkError(f"Bad request (400) for {url}") from e
 
                 case 401:
-                    raise NetworkError(f"Unauthorized {url}") from e
+                    raise NetworkError(f"Unauthorized (401) for {url}") from e
 
                 case 403:
-                    raise NetworkError(f"Forbidden {url}") from e
+                    raise NetworkError(f"Forbidden (403) for {url}") from e
 
                 case 404:
-                    raise NetworkError(f"Not found {url}") from e
+                    raise NetworkError(f"Not found (404) for {url}") from e
 
                 case 410:
-                    raise NetworkError(f"Gone {url}") from e
+                    raise NetworkError(f"Gone (410) for {url}") from e
 
                 case 408 | 429:
                     raise NetworkError(f"Temporary client error ({status_code}) while fetching {url}", retryable=True) from e
@@ -93,7 +93,7 @@ class NetworkManager(Manager):
             ) from e
 
 
-class RobotsTxtManager(Manager):
+class RobotsTxtManager(BaseDomainManager):
     def __init__(self, cache: Cache, network_manager: NetworkManager, config: CrawlerConfig):
         self.cache = cache
         self.parser_dict: dict[str, Protego] = {}

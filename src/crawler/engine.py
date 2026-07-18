@@ -1,5 +1,3 @@
-# encoding: utf-8
-
 from __future__ import annotations
 
 import re
@@ -45,7 +43,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # TODO: ajouter sentry pour le logging des erreurs
 
-class FixedList[T]:
+class ThreadLocalURLTracker[T]:
     def __init__(self, size: int, value: T):
         self._data = [value] * size
 
@@ -80,9 +78,9 @@ class ConfigFileEventHandler(FileSystemEventHandler):
 
 
 class QueueRecharger(threading.Thread):
-    def __init__(self, queue: PriorityQueue[tuple[float, str]], Session: scoped_session[ASession], stop_event: threading.Event, pause_event: threading.Event):
+    def __init__(self, queue: PriorityQueue[tuple[float, str]], session_factory: scoped_session[ASession], stop_event: threading.Event, pause_event: threading.Event):
         threading.Thread.__init__(self)
-        self.Session = Session
+        self.session_factory = session_factory
         self.queue = queue
         self.stop_event = stop_event
         self.pause_event = pause_event
@@ -96,7 +94,7 @@ class QueueRecharger(threading.Thread):
         self.logger = logger.bind(class_name=self.__class__.__name__)
 
     def run(self):
-        with self.logger.catch(level=LoggingLevels.CRITICAL, message=f"A fatal error an occured while running the running loop of the QueueRecharger {self.name} ({self.native_id})"):
+        with self.logger.catch(level=LoggingLevels.CRITICAL, message=f"A fatal, unexpected error occurred in the run loop of QueueRecharger {self.name} ({self.native_id}). The thread is stopping."):
             self.logger.info("QueueRecharger started.")
 
 
@@ -115,15 +113,15 @@ class QueueRecharger(threading.Thread):
                 self.last_activity = time.time()
                 time.sleep(1)
                 if self.queue.qsize() < self.config.min_queue_size:
-                    with self.logger.catch(message="Error while recharging the queue"):
+                    with self.logger.catch(level=LoggingLevels.ERROR, message=f"Failed to recharge the queue (current size: {self.queue.qsize()}, min: {self.config.min_queue_size}). Will retry on the next cycle."):
                         self.logger.debug("Recharging the queue...")
                         start_time = time.time()
                         self.recharge_queue()
                         self.logger.debug(f"Queue recharged in {time.time() - start_time} seconds")
-            self.logger.success(f"{self.name} finished sucessfully.")
+            self.logger.success(f"{self.name} finished successfully.")
 
     def recharge_queue(self):
-        with self.Session() as session:
+        with self.session_factory() as session:
             urls = session.execute(select(URL.url, WaitingURL.domain_crawled_at, WaitingURL.id).join(WaitingURL.url).order_by(WaitingURL.domain_crawled_at.asc()).limit(self.config.max_queue_size - self.queue.qsize())).all()
         ids = [url[2] for url in urls]
 
@@ -132,7 +130,7 @@ class QueueRecharger(threading.Thread):
 
         for url in urls:
             self.queue.put((url[1], url[0]))
-        with self.Session() as session, self.logger.catch(message="Error while recharging the queue", onerror=lambda _: session.rollback()):
+        with self.session_factory() as session, self.logger.catch(level=LoggingLevels.ERROR, message=f"Failed to remove {len(ids)} recharged URL(s) from the waiting list. Rolling back transaction.", onerror=lambda _: session.rollback()):
             session.execute(delete(WaitingURL).where(WaitingURL.id.in_(ids)))
             session.commit()
 
@@ -141,13 +139,13 @@ class QueueRecharger(threading.Thread):
 
 
 class Crawler(threading.Thread):
-    def __init__(self, queue: PriorityQueue[tuple[float, str]], Session: scoped_session[ASession],
-                 cache: Cache, stop_event: threading.Event, pause_event: threading.Event, id: int,
-                 crawling_urls: FixedList[str], crawling_urls_lock: threading.Lock, domain_crawl_time: dict[str, float],
+    def __init__(self, queue: PriorityQueue[tuple[float, str]], session_factory: scoped_session[ASession],
+                 cache: Cache, stop_event: threading.Event, pause_event: threading.Event, crawler_id: int,
+                 crawling_urls: ThreadLocalURLTracker[str], crawling_urls_lock: threading.Lock, domain_crawl_time: dict[str, float],
                  domain_crawl_time_lock: threading.Lock, crawled_urls_bf: Bloom, remove_params: list[str],
                  crawled_urls_bf_lock: threading.Lock):
         threading.Thread.__init__(self)
-        self.Session = Session
+        self.session_factory = session_factory
         self.queue = queue
         self.stop_event = stop_event
         self.pause_event = pause_event
@@ -155,9 +153,9 @@ class Crawler(threading.Thread):
         self.crawling_urls_lock = crawling_urls_lock
         self.domain_crawl_time = domain_crawl_time
         self.domain_crawl_time_lock = domain_crawl_time_lock
-        self.name = f"Crawler-{id+1}"
+        self.name = f"Crawler-{crawler_id+1}"
         self.crawled_urls_bf = crawled_urls_bf
-        self.crawler_id = id
+        self.crawler_id = crawler_id
         self.remove_params = remove_params
         self.cache = cache
         
@@ -179,7 +177,7 @@ class Crawler(threading.Thread):
 
     @contextmanager
     def db_transaction(self, autocommit: bool = False) -> Generator[ASession]:
-        with self.Session() as session:
+        with self.session_factory() as session:
             try:
                 yield session
                 if autocommit:
@@ -334,7 +332,6 @@ class Crawler(threading.Thread):
         return True
 
     def crawl(self, url: str) -> CrawlResult:
-        # sourcery skip: de-morgan
         """
         Crawle une URL et retourne le titre, le contenu et les liens.
 
@@ -409,7 +406,7 @@ class Crawler(threading.Thread):
         """
         Lance le crawler.
         """
-        with self.logger.catch(level=LoggingLevels.CRITICAL, message=f"A fatal error an occured while running loop of the crawler {self.name} ({self.native_id})"):
+        with self.logger.catch(level=LoggingLevels.CRITICAL, message=f"A fatal, unexpected error occurred in the run loop of {self.name} ({self.native_id}). The thread is stopping."):
             self.logger.info(f"Crawler {self.name} started")
             time.sleep(5) # Attente de 5 secondes pour permettre le démarrage des threads
             
@@ -514,4 +511,4 @@ class Crawler(threading.Thread):
                 else:
                     self.crawled_urls_bf.add(url)
                     self.pages_crawled += 1
-            self.logger.success(f"{self.name} finished sucessfully")
+            self.logger.success(f"{self.name} finished successfully")
