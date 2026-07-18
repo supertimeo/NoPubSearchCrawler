@@ -1,9 +1,0 @@
-num_crawlers: 15
-min_queue_size: 200
-max_queue_size: 1000
-
-network:
-  timeout: 5
-  allow_redirects: false
-  max_waiting_delay: 60
-  default_waiting_delay: 5

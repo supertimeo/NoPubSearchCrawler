@@ -1,53 +1,43 @@
 from __future__ import annotations
 
-#encoding: utf-8
-
-# import standard
-import time
-import sys
+# import pour les arguments de la ligne de commande
+import argparse  # type: ignore
+import gc
+import heapq
 import json
 import os
-from typing import Optional, Callable, Any
-from contextlib import contextmanager
-import gc
-from itertools import count
+import socket  # type: ignore
+import sqlite3  # type: ignore
+import sys
+# import pour la gestion des threads
+import threading  # type: ignore
+# import standard
+import time
+# import pour la gestion des erreurs et des tracebacks
+import traceback  # type: ignore
+import urllib  # type: ignore
+from collections import defaultdict
 from functools import lru_cache
-from collections import deque, defaultdict
-
-import heapq
+from http.client import RemoteDisconnected  # type: ignore
+from itertools import count
+from typing import Optional
+from urllib.parse import urlparse, urljoin, urlunparse, ParseResult, parse_qsl, urlencode  # type: ignore
+from urllib.robotparser import RobotFileParser  # type: ignore
 
 # import pour le scraping et le crawling
-import requests # type: ignore
-from selectolax.parser import HTMLParser # type: ignore
-import urllib # type: ignore
-from urllib.robotparser import RobotFileParser # type: ignore
-from urllib.parse import urlparse, urljoin, urlunparse, ParseResult, parse_qsl, urlencode # type: ignore
-from urllib.request import urlopen # type: ignore
-import urllib3 # type: ignore
-import socket # type: ignore
-from http.client import RemoteDisconnected # type: ignore
-
-# import pour la gestion de la base de données
-from sqlite3worker import Sqlite3Worker # type: ignore
-import sqlite3 # type: ignore
-
-# import pour la gestion des logs
-from loguru import logger # type: ignore
-
-# import pour la gestion des threads
-import threading # type: ignore
-
-# import pour la gestion des erreurs et des tracebacks
-import traceback # type: ignore
-
+import requests  # type: ignore
+import urllib3  # type: ignore
 # import pour la gestion du cache
-from diskcache import Cache # type: ignore
-
-# import pour les arguments de la ligne de commande
-import argparse # type: ignore
-
+from diskcache import Cache  # type: ignore
+# import pour la gestion des logs
+from loguru import logger  # type: ignore
 # imports pour le bloom filter
-from rbloom import Bloom # type: ignore
+from rbloom import Bloom  # type: ignore
+from selectolax.parser import HTMLParser  # type: ignore
+# import pour la gestion de la base de données
+from sqlite3worker import Sqlite3Worker  # type: ignore
+
+# encoding: utf-8
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-l", "--delete-logs", action="store_true", help="Delete the logs")
@@ -156,7 +146,6 @@ class PriorityQueue:
             if isinstance(items, tuple):
                 items = [items]
             
-            now = int(time.time())
             for item in items:
                 url = item[2]
                 domain = urlparse(url).netloc
@@ -334,35 +323,36 @@ class Crawler(threading.Thread):
     def get_pure_url(self, url: str) -> str:
         # 1. Analyser l'URL
         parsed = urlparse(url)
-        
+
         # 2. Normaliser le schéma et le netloc (domaine) en minuscules
         scheme = parsed.scheme.lower()
         netloc = parsed.netloc.lower()
-        
+
         # 3. Traiter les paramètres (Query String)
         # parse_qsl transforme "a=1&b=2" en [('a', '1'), ('b', '2')]
         query_params = parse_qsl(parsed.query, keep_blank_values=True)
-        
+
         # Filtrer les paramètres inutiles et Trier
         filtered_params = []
-        for key, value in query_params:
-            if key.lower() not in self.remove_params:
-                filtered_params.append((key, value))
-        
+        filtered_params.extend(
+            (key, value)
+            for key, value in query_params
+            if key.lower() not in self.remove_params
+        )
         # Le tri est crucial : ?a=1&b=2 devient identique à ?b=2&a=1
         filtered_params.sort()
-        
+
         # Reconstruire la query string
         new_query = urlencode(filtered_params)
-        
+
         # 4. Reconstruire l'URL sans le fragment ('')
         # Structure: scheme, netloc, path, params, query, fragment
         clean_url = urlunparse((scheme, netloc, parsed.path, parsed.params, new_query, ''))
-        
+
         # Optionnel : retirer le slash final si ce n'est pas la racine
         if clean_url.endswith('/') and len(parsed.path) > 1:
             clean_url = clean_url[:-1]
-            
+
         return clean_url
 
     @lru_cache(maxsize=10_000)
@@ -386,7 +376,8 @@ class Crawler(threading.Thread):
             crawler_logger.error(f"Timeout while resolving {domain}")
             return False
 
-    def get_robots_txt_urlpath(self, parsed_url: ParseResult) -> Optional[list[str]]:
+    @staticmethod
+    def get_robots_txt_urlpath(parsed_url: ParseResult) -> Optional[list[str]]:
         """
         Obtient le robots.txt d'un domaine.
 
@@ -435,6 +426,7 @@ class Crawler(threading.Thread):
 
         Args:
             parsed_url: L'URL à lire.
+            url: je sait plus ce que c'est
         """
         with crawler_logger.contextualize(name=self.crawler_name), traceback_logger.contextualize(name=self.crawler_name):
             try:
@@ -466,7 +458,8 @@ class Crawler(threading.Thread):
                 crawler_logger.error(f"Error while reading robots.txt for {url} : {e}")
                 raise
 
-    def extract_main_content(self, tree: HTMLParser) -> str:
+    @staticmethod
+    def extract_main_content(tree: HTMLParser) -> str:
         """
         Extrait le contenu textuel principal d'un arbre HTML parsé avec selectolax.
 
@@ -534,7 +527,7 @@ class Crawler(threading.Thread):
 
     def get_domain_crawl_delay(self, url: str) -> float:
         self.read_robots_txt(urlparse(url), url)
-        return self.robot_parser.crawl_delay("*") if self.robot_parser.crawl_delay("*") else WAITING_DELAY # type: ignore
+        return self.robot_parser.crawl_delay("*") or WAITING_DELAY # type: ignore
 
     def crawl(self, url: str, session: requests.Session) -> tuple[Optional[str], Optional[str], Optional[dict[str, float]], bool]:
         # sourcery skip: de-morgan
@@ -674,10 +667,10 @@ class Crawler(threading.Thread):
                     try:
                         start_time = time.time()
                         title, content, links, success = self.crawl(url, session)
-                        links = links or dict()
+                        links = links or {}
                         if success:
                             self.db.execute("INSERT INTO crawled_urls (url) VALUES (?)", (url,))
-                    except Exception as e:
+                    except Exception:
                         crawler_logger.error(f"the page {url} could not be crawled.")
                         traceback_logger.error(traceback.format_exc())
                         continue
@@ -723,13 +716,13 @@ def main():
         'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
         'gclid', 'fbclid', 'ref', 'source', 'yclid', '_ga'
     ]
-    
+
     queue: PriorityQueue[tuple[float, str, int]] = PriorityQueue() # type: ignore
 
     with open("other_start_urls2.json", "r") as f:
-        for id, url in enumerate(json.load(f)):
+        for url in json.load(f):
             queue.put((time.time(), time.time(), url))
-    
+
     for thread_id in range(NUM_CRAWLERS):
         crawler = Crawler(queue, stop_event, thread_id, domain_crawl_time, domain_crawl_time_lock, crawled_urls_bf, database_reorganize_event, database_ready_reorganize_event, remove_params)
         crawler.start()
@@ -754,11 +747,11 @@ def main():
     # attente de la fin des threads
     for t in crawlers:
         t.join()
-    
+
     if args.delete_cache or args.delete_all:
         cache.clear()
         cache.close()
-    
+
     crawler_logger.info("All crawler finished")
 
 if __name__ == "__main__":

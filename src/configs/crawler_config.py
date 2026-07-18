@@ -1,13 +1,15 @@
 from pydantic import model_validator
 
-from src.configs.base_config import BaseConfig
-from .errors import ConfigurationError
+from src.common.base_config import BaseConfig
+from src.common.errors import ConfigurationError
 
 class CrawlerNetworkConfig(BaseConfig):
     timeout: float
     allow_redirects: bool
     max_waiting_delay: float
     default_waiting_delay: float
+    user_agent: str
+    bot_name: str
 
     @model_validator(mode="after")
     def validate_default_waiting_delay(self) -> CrawlerNetworkConfig:

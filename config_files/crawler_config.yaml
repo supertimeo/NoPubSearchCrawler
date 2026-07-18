@@ -1,0 +1,10 @@
+max_queue_size: 10000
+min_queue_size: 2000
+network:
+  allow_redirects: false
+  default_waiting_delay: 5.0
+  max_waiting_delay: 5.0
+  timeout: 5.0
+  bot_name: "NoPubSearchBot"
+  user_agent: "NoPubSearchBot/0.13.52 (Python Requests; contact: fort.timeo38@gmail.com)"
+num_crawlers: 15

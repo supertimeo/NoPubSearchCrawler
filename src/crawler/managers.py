@@ -9,7 +9,7 @@ from diskcache import Cache
 from loguru import logger
 from protego import Protego
 
-from .crawler_config import CrawlerConfig
+from src.configs.crawler_config import CrawlerConfig
 from .errors import NetworkError
 
 class Manager:
@@ -23,7 +23,7 @@ class NetworkManager(Manager):
 
     def fetch_page(self, url):
         try:
-            response = self.session.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"}, timeout=self.config.network.timeout, allow_redirects=self.config.network.allow_redirects)
+            response = self.session.get(url, headers={"User-Agent": self.config.network.user_agent}, timeout=self.config.network.timeout, allow_redirects=self.config.network.allow_redirects)
             response.raise_for_status()
 
         except requests.Timeout as e:
@@ -123,7 +123,7 @@ class RobotsTxtManager(Manager):
         robots_txt_url = f"{parsed_url.scheme}://{netloc}/robots.txt"
 
         if netloc in self.cache:
-            return self.cache[netloc] if self.cache[netloc] else None
+            return self.cache[netloc]
 
         try:
             response = self.network_manager.fetch_page(robots_txt_url)
@@ -155,10 +155,10 @@ class RobotsTxtManager(Manager):
         parser = self.get_parser(url)
         if parser is None:
             return self.config.network.default_waiting_delay
-        return min(parser.crawl_delay("*") or self.config.network.default_waiting_delay, self.config.network.max_waiting_delay)
+        return min(parser.crawl_delay(self.config.network.bot_name) or self.config.network.default_waiting_delay, self.config.network.max_waiting_delay)
 
     def is_allowed(self, url: str) -> bool:
         parser = self.get_parser(url)
         if parser is None:
             return True
-        return parser.can_fetch(url, "*")
+        return parser.can_fetch(url, self.config.network.bot_name)

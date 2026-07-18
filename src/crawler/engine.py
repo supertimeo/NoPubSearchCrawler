@@ -2,44 +2,35 @@
 
 from __future__ import annotations
 
-import json
-import os
 import re
-import shutil
-import sys
-# import standard
 import time
-from argparse import Namespace
 from contextlib import contextmanager
-from enum import StrEnum
 from pathlib import Path
 from queue import PriorityQueue
-from typing import TYPE_CHECKING, cast, Generator, Final
+from typing import TYPE_CHECKING, cast, Generator
 from urllib.parse import urlparse, urljoin, urlunparse, parse_qsl, urlencode, unquote
 
 # import pour le scraping et le crawling
 import urllib3
-from dotenv import load_dotenv
 # import pour la gestion des logs
 from loguru import logger
 from pydantic.v1.dataclasses import dataclass
 from selectolax.parser import HTMLParser
-from sqlalchemy import create_engine, select, exists, delete, Engine
+from sqlalchemy import select, exists, delete
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.engine import URL as DB_URL
-from sqlalchemy.orm import scoped_session, sessionmaker, \
-    Session as ASession
+from sqlalchemy.orm import scoped_session, Session as ASession
 from watchdog.events import FileSystemEventHandler, DirMovedEvent, FileMovedEvent
-from watchdog.observers import Observer
 
-from src.crawler.crawler_config import CrawlerConfig
-from src.database.model import URL, WaitingURL, CrawledURL, Page, Link, Base
-from .errors import NetworkError, CrawlError, InitializationError, DatabaseError, \
-    MissingEnvironmentVariableError
+from src.common.errors import DatabaseError
+from src.common.paths import crawler_config_file_path
+from src.configs.crawler_config import CrawlerConfig
+from src.database.model import URL, WaitingURL, CrawledURL, Page, Link
+from .errors import NetworkError, CrawlError
+from .log_levels import LoggingLevels
 from .managers import NetworkManager, RobotsTxtManager
 
 if TYPE_CHECKING:
-    from loguru import Record
+    pass
 
 # import pour la gestion des threads
 import threading
@@ -47,22 +38,12 @@ import threading
 # import pour la gestion du cache
 from diskcache import Cache
 
-# import pour les arguments de la ligne de commande
-import argparse
-
 # imports pour le bloom filter
 from rbloom import Bloom
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-load_dotenv()
-
-root_folder_path: Final[Path] = Path(__file__).resolve().parent.parent.parent
-log_folder_path: Final[Path] = root_folder_path / "logs"
-cache_folder_path: Final[Path] = root_folder_path / "caches"
-backup_folder_path: Final[Path] = root_folder_path / "backups"
-assets_folder_path: Final[Path] = root_folder_path / "assets"
-config_file_path: Final[Path] = root_folder_path / "configs" / "crawler_config.yaml"
+# TODO: ajouter sentry pour le logging des erreurs
 
 class FixedList[T]:
     def __init__(self, size: int, value: T):
@@ -86,55 +67,64 @@ class CrawlResult:
     timestamp: float
     
 
-class LoggingLevels(StrEnum):
-    TRACE = "TRACE"
-    DEBUG = "DEBUG"
-    INFO = "INFO"
-    SUCCESS = "SUCCESS"
-    WARNING = "WARNING"
-    ERROR = "ERROR"
-    CRITICAL = "CRITICAL"
-    FATAL = "FATAL"
-
-
 class ConfigFileEventHandler(FileSystemEventHandler):
     def __init__(self, crawlers: list[Crawler], queue_recharger: QueueRecharger):
         self.crawlers = crawlers
         self.queue_recharger = queue_recharger
     def on_moved(self, event: DirMovedEvent | FileMovedEvent) -> None:
-        if Path(cast(str, event.src_path)).resolve() == config_file_path:
-            new_config = CrawlerConfig.load_from_yml(config_file_path)
+        if Path(cast(str, event.src_path)).resolve() == crawler_config_file_path:
+            new_config = CrawlerConfig.load_from_yml(crawler_config_file_path)
             self.queue_recharger.set_config(new_config)
             for crawler in self.crawlers:
                 crawler.set_config(new_config)
 
 
 class QueueRecharger(threading.Thread):
-    def __init__(self, queue: PriorityQueue[tuple[float, str]], Session: scoped_session[ASession], stop_event: threading.Event):
+    def __init__(self, queue: PriorityQueue[tuple[float, str]], Session: scoped_session[ASession], stop_event: threading.Event, pause_event: threading.Event):
         threading.Thread.__init__(self)
         self.Session = Session
         self.queue = queue
         self.stop_event = stop_event
-        self.config = CrawlerConfig.load_from_yml(config_file_path)
+        self.pause_event = pause_event
+        self.config = CrawlerConfig.load_from_yml(crawler_config_file_path)
         self.id = self.config.num_crawlers + 1
+        self.name = "QueueRecharger"
+
+        self.paused = False
+        self.last_activity = time.time()
 
         self.logger = logger.bind(class_name=self.__class__.__name__)
 
     def run(self):
         with self.logger.catch(level=LoggingLevels.CRITICAL, message=f"A fatal error an occured while running the running loop of the QueueRecharger {self.name} ({self.native_id})"):
             self.logger.info("QueueRecharger started.")
+
+
             while not self.stop_event.is_set():
+                if self.pause_event.is_set():
+                    if not self.paused:
+                        self.paused = True
+                        self.logger.success(f"{self.name} is paused")
+                    time.sleep(1)
+                    continue
+
+                if self.paused:
+                    self.paused = False
+                    self.logger.success(f"{self.name} is resumed")
+
+                self.last_activity = time.time()
+                time.sleep(1)
                 if self.queue.qsize() < self.config.min_queue_size:
-                    time.sleep(10)
                     with self.logger.catch(message="Error while recharging the queue"):
                         self.logger.debug("Recharging the queue...")
                         start_time = time.time()
                         self.recharge_queue()
                         self.logger.debug(f"Queue recharged in {time.time() - start_time} seconds")
+            self.logger.success(f"{self.name} finished sucessfully.")
 
     def recharge_queue(self):
         with self.Session() as session:
-            urls = session.execute(select(URL.url, WaitingURL.domain_crawled_at, WaitingURL.id).join(WaitingURL.url).order_by(WaitingURL.domain_crawled_at.asc()).limit(1000 - self.queue.qsize())).all()
+            urls = session.execute(select(URL.url, WaitingURL.domain_crawled_at, WaitingURL.id).join(WaitingURL.url).order_by(WaitingURL.domain_crawled_at.asc()).limit(self.config.max_queue_size - self.queue.qsize())).all()
         ids = [url[2] for url in urls]
 
         if not ids:
@@ -152,13 +142,15 @@ class QueueRecharger(threading.Thread):
 
 class Crawler(threading.Thread):
     def __init__(self, queue: PriorityQueue[tuple[float, str]], Session: scoped_session[ASession],
-                 cache: Cache, stop_event: threading.Event, id: int, crawling_urls: FixedList[str], crawling_urls_lock: threading.Lock, domain_crawl_time: dict[str, float],
+                 cache: Cache, stop_event: threading.Event, pause_event: threading.Event, id: int,
+                 crawling_urls: FixedList[str], crawling_urls_lock: threading.Lock, domain_crawl_time: dict[str, float],
                  domain_crawl_time_lock: threading.Lock, crawled_urls_bf: Bloom, remove_params: list[str],
                  crawled_urls_bf_lock: threading.Lock):
         threading.Thread.__init__(self)
         self.Session = Session
         self.queue = queue
         self.stop_event = stop_event
+        self.pause_event = pause_event
         self.crawling_urls = crawling_urls
         self.crawling_urls_lock = crawling_urls_lock
         self.domain_crawl_time = domain_crawl_time
@@ -169,7 +161,7 @@ class Crawler(threading.Thread):
         self.remove_params = remove_params
         self.cache = cache
         
-        self.config = CrawlerConfig.load_from_yml(config_file_path)
+        self.config = CrawlerConfig.load_from_yml(crawler_config_file_path)
 
         self.crawled_urls_bf_lock = crawled_urls_bf_lock
 
@@ -177,6 +169,10 @@ class Crawler(threading.Thread):
 
         self.network_manager = NetworkManager(self.config)
         self.robots_txt_manager = RobotsTxtManager(self.cache, self.network_manager, self.config)
+
+        self.paused = False
+        self.pages_crawled = 0
+        self.last_activity = time.time()
 
     def set_config(self, config: CrawlerConfig):
         self.config = config
@@ -244,7 +240,7 @@ class Crawler(threading.Thread):
             True si l'URL a déjà été crawlée, False sinon.
         """
         with self.db_transaction() as session:
-            return url in self.crawled_urls_bf and cast(bool, session.scalar(select(exists().join(CrawledURL.url).where(URL.url == url))))
+            return url in self.crawled_urls_bf and cast(bool, session.scalar(select(exists(select(CrawledURL).join(CrawledURL.url).where(URL.url == url)))))
 
     @staticmethod
     def extract_main_content(tree: HTMLParser) -> str:
@@ -416,13 +412,30 @@ class Crawler(threading.Thread):
         with self.logger.catch(level=LoggingLevels.CRITICAL, message=f"A fatal error an occured while running loop of the crawler {self.name} ({self.native_id})"):
             self.logger.info(f"Crawler {self.name} started")
             time.sleep(5) # Attente de 5 secondes pour permettre le démarrage des threads
-
+            
             while not self.stop_event.is_set():
                 # Récupération d'une page à crawler
+                if self.pause_event.is_set():
+                    if not self.paused:
+                        # noinspection PyUnusedLocal
+                        self.paused = True
+                        self.logger.success(f"{self.name} is paused")
+                    time.sleep(1)
+                    continue
+
+                if self.paused:
+                    self.paused = False
+                    self.logger.success(f"{self.name} is resumed")
+                
                 if self.queue.empty():
+                    time.sleep(5)
                     continue
                 domain_crawled_at, url = self.queue.get()
+                self.last_activity = time.time()
                 self.logger.trace(f"Get {url} in the queue")
+
+                # Nettoyer l'URL
+                url = self.get_pure_url(url)
 
                 delay = self.robots_txt_manager.get_crawl_delay(url)
                 if domain_crawled_at + delay > time.time():
@@ -432,6 +445,7 @@ class Crawler(threading.Thread):
                     continue
 
                 if not self.is_crawlable(url):
+                    time.sleep(0.5)
                     continue
 
                 with self.crawled_urls_bf_lock:
@@ -443,11 +457,9 @@ class Crawler(threading.Thread):
                 with self.crawling_urls_lock:
                     if url in self.crawling_urls:
                         self.logger.trace(f"{url} The URL is already being crawled by another crawler.")
+                        time.sleep(0.5)
                         continue
                     self.crawling_urls[self.crawler_id] = url
-
-                # Nettoyer l'URL
-                url = self.get_pure_url(url)
 
                 # Crawling de la page
                 self.logger.debug(f"Crawling page {url}...")
@@ -501,227 +513,5 @@ class Crawler(threading.Thread):
                     self.logger.exception(f"Error while adding {url} to database")
                 else:
                     self.crawled_urls_bf.add(url)
-
-
-def parsing_arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-l", "--delete-logs", action="store_true", help="Delete the logs")
-    parser.add_argument("-c", "--delete-cache", action="store_true", help="Delete the cache")
-    parser.add_argument("-d", "--delete-db", action="store_true", help="Delete the database")
-    parser.add_argument("-a", "--delete-all", action="store_true", help="Delete the logs, the database and the cache")
-    parser.add_argument("-v", "--vacuum", action="store_true", help="Vacuum the database")
-    args = parser.parse_args()
-    return args
-
-def init_logger(args: argparse.Namespace):
-    if args.delete_logs or args.delete_all and log_folder_path.exists():
-            shutil.rmtree(log_folder_path)
-            log_folder_path.mkdir()
-
-    def log_location_patcher(record: Record):
-        class_name = record["extra"].get("class_name")
-        record["extra"]["location"] = f"{record['file'].name}{f":{class_name}" if class_name is not None else ""}{f":{record['function']}" if record['function'] != "<module>" else ""}:{record['line']}"
-        record["extra"]["thread_info"] = f"{record["thread"].name} ({record["thread"].id})"
-
-    def log_format(_record: Record) -> str:
-        return (
-            "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
-            "<level>{level: <8}</level> | "
-            "{extra[location]: <50} | "
-            "{extra[thread_info]: <20} - "
-            "{message}\n"
-            "{exception}"
-        )
-
-    # création du logger
-    logger.remove()
-
-    logger.level(
-        LoggingLevels.FATAL,
-        no=60,
-        color="<white><bold><bg red>",
-        icon="☠️",
-    )
-
-    logger.configure(patcher=log_location_patcher)
-
-    logger.add(log_folder_path / "latest.log", rotation="100 MB", enqueue=True, compression="zip", level=LoggingLevels.INFO,
-               format=log_format)
-    logger.add(log_folder_path / "error.log", rotation="100 MB", enqueue=True, compression="zip", level=LoggingLevels.ERROR,
-               format=log_format, backtrace=True, diagnose=True)
-    logger.add(log_folder_path / "trace.log", rotation="100 MB", enqueue=True, compression="zip", level=LoggingLevels.TRACE,
-               format=log_format, backtrace=True, diagnose=True)
-    logger.add(sys.stdout, enqueue=True, level=LoggingLevels.TRACE, format=log_format, backtrace=True, diagnose=True)
-    logger.info("Logger initialized")
-
-def init_db(args: Namespace) -> tuple[Engine, scoped_session[ASession]]:
-    logger.info("Initializing database...")
-    start_time = time.time()
-
-    db_url = DB_URL.create(
-    "postgresql+psycopg",
-    username=os.getenv("DB_USERNAME"),
-    password=os.getenv("DB_PASSWORD"),
-    host="localhost",
-    port=5432,
-    database="nopubsearch",
-)
-
-    engine = create_engine(
-        db_url,
-        pool_size=20,  # Assez de connexions pour tes 15 crawler + tes threads de fond
-        max_overflow=10  # Une petite marge de sécurité
-    )
-
-    Session = scoped_session(sessionmaker(
-        bind=engine,
-        autoflush=False,
-        expire_on_commit=False,
-    ))
-
-    if args.delete_db or args.delete_all:
-        Base.metadata.drop_all(engine)
-
-    Base.metadata.create_all(engine)
-
-    logger.success(f"Database initialized successfully in {time.time() - start_time}")
-
-    return engine, Session
-
-def init_bloom_filter(Session: scoped_session[ASession]) -> tuple[Bloom, threading.Lock]:
-    logger.info("Initializing crawled url bloom-filter...")
-    start_time = time.time()
-
-    crawled_urls_bf = Bloom(100_000, 0.001)
-    with Session() as session:
-        crawled_urls_bf.update(set(session.execute(select(URL.url).join(CrawledURL.url)).all()))
-    crawled_urls_bf_lock = threading.Lock()
-
-    logger.success(f"Crawled urls bloom-filter initialized successfully in {time.time() - start_time}")
-
-    return crawled_urls_bf, crawled_urls_bf_lock
-
-def init_queue() -> PriorityQueue:
-    logger.info("Initializing queue...")
-    start_time = time.time()
-
-    queue = PriorityQueue[tuple[float, str]]()
-    with open(assets_folder_path / "start_url_lists" / "start_urls.json", "r") as f:
-        for id, url in enumerate(seed["url"] for seed in json.load(f)["crawler_seeds"]):
-            queue.put((0, url))
-
-    logger.success(f"Queue initialized successfully in {time.time() - start_time}")
-
-    return queue
-
-def init_cache(args: Namespace) -> Cache:
-    if args.delete_cache or args.delete_all and cache_folder_path.exists():
-        shutil.rmtree(cache_folder_path)
-        cache_folder_path.mkdir()
-    return Cache(str(cache_folder_path / "robot_txts_cache"))
-
-def init_config(crawlers: list[Crawler], queue_recharger: QueueRecharger):
-    observer = Observer()
-    observer.schedule(ConfigFileEventHandler(crawlers, queue_recharger), path=".", recursive=False)
-
-    observer.start()
-
-def init() -> tuple[Engine, scoped_session[ASession], Cache, Bloom, threading.Lock, PriorityQueue[tuple[float, str]]]:
-    args = parsing_arguments()
-
-    init_logger(args)
-
-    initialization_errors = []
-    if os.getenv("DB_USERNAME") is None:
-        initialization_errors.append(
-            MissingEnvironmentVariableError(
-                "Missing required environment variable: DB_USERNAME"
-            )
-        )
-    if os.getenv("DB_PASSWORD") is None:
-        initialization_errors.append(
-            MissingEnvironmentVariableError(
-                "Missing required environment variable: DB_PASSWORD"
-            )
-        )
-
-    if initialization_errors:
-        ExceptionGroup(
-            "Failed to initialize database configuration",
-            initialization_errors
-        )
-
-    backup_folder_path.mkdir(parents=True, exist_ok=True)
-
-    try:
-        engine, Session = init_db(args)
-    except Exception as e:
-        raise InitializationError("Failed to initialize database") from e
-
-    try:
-        crawled_urls_bf, crawled_urls_bf_lock = init_bloom_filter(Session)
-    except Exception as e:
-        raise InitializationError("Failed to initialize bloom filter") from e
-
-    try:
-        queue = init_queue()
-    except Exception as e:
-        raise InitializationError("Failed to initialize queue") from e
-
-    try:
-        cache = init_cache(args)
-    except Exception as e:
-        raise InitializationError("Failed to initialize cache") from e
-
-    return engine, Session, cache, crawled_urls_bf, crawled_urls_bf_lock, queue
-
-def main():
-    # création des threads
-    crawlers = []
-    config = CrawlerConfig.load_from_yml(config_file_path)
-    print(config)
-    stop_event = threading.Event()
-    domain_crawl_time = {}
-    domain_crawl_time_lock = threading.Lock()
-    crawling_urls = FixedList(config.num_crawlers, "")
-    crawling_urls_lock = threading.Lock()
-
-    remove_params = [
-        'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
-        'gclid', 'fbclid', 'ref', 'source', 'yclid', '_ga'
-    ]
-
-    with logger.catch(level=LoggingLevels.FATAL, message="Initialization failed !", onerror=lambda _: sys.exit(-1)):
-        engine, Session, cache, crawled_urls_bf, crawled_urls_bf_lock, queue = init()
-
-    logger.info("Launching crawler...")
-    start_time = time.time()
-    with logger.catch(level=LoggingLevels.FATAL, message="Launching crawler failed", onerror=lambda _: sys.exit(-1)):
-        for thread_id in range(config.num_crawlers):
-            crawler = Crawler(queue, Session, cache, stop_event, thread_id, crawling_urls, crawling_urls_lock, domain_crawl_time, domain_crawl_time_lock, crawled_urls_bf, remove_params, crawled_urls_bf_lock)
-            crawler.start()
-            crawlers.append(crawler)
-    logger.success(f"Crawlers initialized successfully in {time.time() - start_time}")
-
-    queue_recharger = QueueRecharger(queue, Session, stop_event)
-    queue_recharger.start()
-
-    init_config(crawlers, queue_recharger)
-
-    while True:
-        # noinspection PyBroadException
-        try:
-            time.sleep(1)
-        except BaseException:
-            stop_event.set()
-            break
-
-    # attente de la fin des threads
-    for t in crawlers:
-        t.join()
-    queue_recharger.join()
-
-    logger.info("All crawler finished")
-
-if __name__ == "__main__":
-    main()
+                    self.pages_crawled += 1
+            self.logger.success(f"{self.name} finished sucessfully")

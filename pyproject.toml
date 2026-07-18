@@ -1,11 +1,12 @@
 [project]
 name = "nopubsearch"
-version = "0.1.0"
-description = "Add your description here"
+version = "v0.13.52"
+description = "Petit moteur de recherche sans aucune pube"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "diskcache>=5.6.3",
+    "fluent-runtime>=0.4.0",
     "loguru>=0.7.3",
     "protego>=0.6.2",
     "psycopg[binary]>=3.3.4",
@@ -16,22 +17,33 @@ dependencies = [
     "requests>=2.34.2",
     "selectolax>=0.4.10",
     "sqlalchemy>=2.0.51",
+    "textual>=8.2.8",
     "urllib3>=2.7.0",
     "watchdog>=6.0.0",
 ]
 
 [dependency-groups]
 dev = [
+    "commitizen>=4.16.5",
     "deptry>=0.25.1",
     "pytest>=9.1.1",
     "ruff>=0.15.21",
+    "textual-dev>=1.8.0",
 ]
 
 [tool.deptry]
 exclude = [
-    "src/crawlers/backups",
+    "src/crawler/backups",
     ".venv"
 ]
 
 [tool.deptry.per_rule_ignores]
 DEP002 = ["psycopg"]
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version_provider = "pep621"
+version_scheme = "semver"
+tag_format = "v$version"
+update_changelog_on_bump = true
+major_version_zero = true

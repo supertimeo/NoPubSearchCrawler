@@ -354,6 +354,23 @@ class QueueRecharger(threading.Thread):
         self.queue.put([(url[0], url[1]) for url in urls])
         self.db.execute(f"DELETE FROM waiting_list WHERE id IN ({','.join('?' for _ in ids)})", ids)
 
+
+def get_pure_url(url: str) -> str:
+    """
+    Obtient la version pure d'une URL, sans les paramètres de requête et le fragment.
+
+    Args:
+        url: L'URL à nettoyer.
+
+    Returns:
+        L'URL pure.
+    """
+    parsed_url = urlparse(url)
+    return urlunparse(
+        (parsed_url.scheme, parsed_url.netloc, parsed_url.path, '', '', '')
+    )
+
+
 class Crawler(threading.Thread):
     def __init__(self, queue: PriorityQueue, stop_event: threading.Event, id: int, domain_crawl_time, domain_crawl_time_lock: threading.Lock, crawled_urls_bf, database_reorganize_event: threading.Event, database_ready_reorganize_event: threading.Event):
         threading.Thread.__init__(self)
@@ -368,21 +385,6 @@ class Crawler(threading.Thread):
         self.database_reorganize_event = database_reorganize_event
         self.database_ready_reorganize_event = database_ready_reorganize_event
         self.crawler_id = id
-
-    def get_pure_url(self, url: str) -> str:
-        """
-        Obtient la version pure d'une URL, sans les paramètres de requête et le fragment.
-
-        Args:
-            url: L'URL à nettoyer.
-
-        Returns:
-            L'URL pure.
-        """
-        parsed_url = urlparse(url)
-        return urlunparse(
-            (parsed_url.scheme, parsed_url.netloc, parsed_url.path, '', '', '')
-        )
 
     @lru_cache(maxsize=10_000)
     def is_resolvable(self, domain: str) -> bool:
@@ -405,7 +407,8 @@ class Crawler(threading.Thread):
             crawler_logger.error(f"Timeout while resolving {domain}")
             return False
 
-    def get_robots_txt_urlpath(self, parsed_url: ParseResult) -> Optional[list[str]]:
+    @staticmethod
+    def get_robots_txt_urlpath(parsed_url: ParseResult) -> Optional[list[str]]:
         """
         Obtient le robots.txt d'un domaine.
 
@@ -485,7 +488,8 @@ class Crawler(threading.Thread):
                 crawler_logger.error(f"Error while reading robots.txt for {url} : {e}")
                 raise
 
-    def extract_main_content(self, tree: HTMLParser) -> str:
+    @staticmethod
+    def extract_main_content(tree: HTMLParser) -> str:
         """
         Extrait le contenu textuel principal d'un arbre HTML parsé avec selectolax.
 
@@ -542,11 +546,11 @@ class Crawler(threading.Thread):
             domain = parsed.netloc
             last_crawled_time = self.domain_crawl_time.get(domain, 0)
             url_domains_last_crawled_time[url] = last_crawled_time
-            
-        for url, last_crawled_time in url_domains_last_crawled_time.items():
+
+        for url in url_domains_last_crawled_time:
             self.db.execute("INSERT INTO temp_waiting_list (url, domain, date) VALUES (?, ?, ?)", (url, domain, int(time.time())))
 
-        
+
         self.db.execute("""INSERT OR IGNORE INTO waiting_list (url, domain, date)
                             SELECT t.url, t.domain, t.date
                             FROM temp_waiting_list t
@@ -623,7 +627,7 @@ class Crawler(threading.Thread):
                         # Récupération des liens de la page
                         links = {link.attributes.get("href") for link in tree.css("a") if link.attributes.get("href")}
                         links = {urljoin(url, link) for link in links if urlparse(link).scheme in ["http", "https", ""]}
-                        links = {self.get_pure_url(link) for link in links if link}
+                        links = {get_pure_url(link) for link in links if link}
                     except (AttributeError, KeyError) as e:
                         # Si une erreur d'attribut est déclenchée, on relève l'exception
                         crawler_logger.error(f"Error while getting links for {url}: {e}")
@@ -725,7 +729,7 @@ class Crawler(threading.Thread):
                     
 
                     # Nettoyer l'URL
-                    url = self.get_pure_url(url)
+                    url = get_pure_url(url)
 
                     # Crawling de la page
                     crawler_logger.info(f"Crawling page {url}...")
@@ -735,7 +739,7 @@ class Crawler(threading.Thread):
                         links = links or set()
                         if success:
                             self.db.execute("INSERT INTO crawled_urls (url) VALUES (?)", (url,))
-                    except Exception as e:
+                    except Exception:
                         crawler_logger.error(f"the page {url} could not be crawled.")
                         traceback_logger.error(traceback.format_exc())
                         continue
