@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 import re
-import socket
 # import pour la gestion des threads
 import threading
 import time
@@ -587,16 +586,6 @@ class Crawler(threading.Thread):
 
         return {url.url: url for url in url_orm_obj}
 
-    @staticmethod
-    def tcp_ping(domain, port=443, timeout=5):
-        start = time.perf_counter()
-
-        try:
-            with socket.create_connection((domain, port), timeout):
-                return (time.perf_counter() - start) * 1000
-        except OSError:
-            return None
-
     def run(self):    # sourcery skip: low-code-quality
         """Exécute la boucle principale du thread de crawler. Coordonne la récupération des URLs, leur filtrage, le respect des délais de crawl et l’enregistrement des résultats en base de données.
 
@@ -680,7 +669,7 @@ class Crawler(threading.Thread):
                         self.domain_errors_count_cache[urlparse(url).netloc] += 1
 
                         if self.domain_errors_count_cache[urlparse(url).netloc] >= self.config.network.max_retry_per_domain:
-                            if not self.tcp_ping(urlparse(url).netloc):
+                            if not self.network_manager.tcp_ping(urlparse(url).netloc):
                                 self.down_domains_cache[urlparse(url).netloc] = 1
                                 continue
                             del self.domain_errors_count_cache[urlparse(url).netloc]

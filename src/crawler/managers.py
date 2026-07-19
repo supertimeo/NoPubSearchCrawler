@@ -1,3 +1,4 @@
+import socket
 import time
 from functools import lru_cache
 from typing import Optional
@@ -63,6 +64,16 @@ class NetworkManager(BaseDomainManager):
         self.session = requests.Session()
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
+
+    @staticmethod
+    def tcp_ping(domain, port=443, timeout=5):
+        start = time.perf_counter()
+
+        try:
+            with socket.create_connection((domain, port), timeout):
+                return (time.perf_counter() - start) * 1000
+        except OSError:
+            return None
 
     def fetch_page(self, url):
         """Télécharge la page située à l’URL donnée et renvoie la réponse HTTP associée. Interprète les erreurs réseau et HTTP pour les transformer en `NetworkError` indiquant si une nouvelle tentative est envisageable.
