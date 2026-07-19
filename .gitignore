@@ -12,12 +12,9 @@ caches/
 .venv
 .env
 
-# Databases
-*.db
-*.sqlite
-*.sql
+# Profiler
+*.prof
 
 # Logs
 *.log
-/database.db-shm
-/database.db-wal
+/logs
