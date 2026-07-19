@@ -28,7 +28,9 @@ dev = [
     "deptry>=0.25.1",
     "pytest>=9.1.1",
     "ruff>=0.15.21",
+    "snakeviz>=2.2.2",
     "textual-dev>=1.8.0",
+    "yappi>=1.7.6",
 ]
 
 [tool.deptry]

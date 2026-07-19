@@ -15,6 +15,12 @@ _current_locale = DEFAULT_LOCALE
 
 
 def init_i18n(locale: str = DEFAULT_LOCALE) -> None:
+    """Initialise l'infrastructure de traduction Fluent pour l'interface TUI.
+    Cette fonction charge les ressources de toutes les locales disponibles et sélectionne la locale active.
+
+    Args:
+        locale (str): La locale à activer au démarrage, ou la locale par défaut si elle n'est pas disponible.
+    """
     global _current_locale
 
     for available_locale in AVAILABLE_LOCALES:
@@ -29,14 +35,36 @@ def init_i18n(locale: str = DEFAULT_LOCALE) -> None:
 
 
 def t(key: str, **kwargs: object) -> str:
+    """Récupère une chaîne traduite pour une clé donnée dans la locale active.
+    Cette fonction insère éventuellement des paramètres dans le message localisé.
+
+    Args:
+        key (str): La clé de message Fluent à traduire.
+        **kwargs (object): Les valeurs de paramètres à injecter dans la chaîne traduite.
+
+    Returns:
+        str: La chaîne localisée formatée pour la locale actuellement active.
+    """
     return _localizations[_current_locale].format_value(key, kwargs or None)
 
 
 def get_locale() -> str:
+    """Retourne la locale actuellement active pour l'interface TUI.
+    Cette fonction permet de connaître la langue utilisée pour la traduction des messages.
+
+    Returns:
+        str: Le code de locale actuellement en cours d'utilisation.
+    """
     return _current_locale
 
 
 def set_locale(locale: str) -> None:
+    """Change la locale active de l'interface TUI et la rend persistante entre les lancements.
+    Cette fonction vérifie que la locale demandée est supportée avant de l'appliquer et de la sauvegarder.
+
+    Args:
+        locale (str): Le code de locale à activer, qui doit appartenir aux locales disponibles.
+    """
     global _current_locale
 
     if locale not in AVAILABLE_LOCALES:
@@ -46,19 +74,35 @@ def set_locale(locale: str) -> None:
 
 
 def next_locale() -> str:
+    """Calcule la prochaine locale disponible dans la liste cyclique des langues supportées.
+    Cette fonction permet de faire défiler les locales de l'interface TUI une par une.
+
+    Returns:
+        str: Le code de la locale suivante par rapport à la locale actuellement active.
+    """
     index = AVAILABLE_LOCALES.index(_current_locale)
     return AVAILABLE_LOCALES[(index + 1) % len(AVAILABLE_LOCALES)]
 
 
 def load_persisted_locale() -> str:
-    """Lit la locale sauvegardée dans le .env, ou la locale par défaut si absente."""
+    """Lit la locale sauvegardée dans le fichier d'environnement de l'application.
+    Cette fonction retourne la locale persistée ou la locale par défaut si aucune valeur n'est définie.
+
+    Returns:
+        str: Le code de locale trouvé dans la variable d'environnement, ou la locale par défaut en l'absence de valeur.
+    """
     import os
 
     return os.getenv(_ENV_KEY, DEFAULT_LOCALE)
 
 
 def _persist_locale(locale: str) -> None:
-    """Sauvegarde la locale choisie dans le .env pour la retrouver au prochain lancement."""
+    """Persiste la locale de l'interface TUI dans les variables d'environnement et le fichier .env.
+    Cette fonction met à jour ou ajoute la clé de locale afin qu'elle soit réutilisée aux prochains lancements.
+
+    Args:
+        locale (str): Le code de locale à enregistrer de manière persistante.
+    """
     import os
 
     os.environ[_ENV_KEY] = locale

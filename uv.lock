@@ -605,7 +605,9 @@ dev = [
     { name = "deptry" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "snakeviz" },
     { name = "textual-dev" },
+    { name = "yappi" },
 ]
 
 [package.metadata]
@@ -633,7 +635,9 @@ dev = [
     { name = "deptry", specifier = ">=0.25.1" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "ruff", specifier = ">=0.15.21" },
+    { name = "snakeviz", specifier = ">=2.2.2" },
     { name = "textual-dev", specifier = ">=1.8.0" },
+    { name = "yappi", specifier = ">=1.7.6" },
 ]
 
 [[package]]
@@ -1009,6 +1013,18 @@ wheels = [
 ]
 
 [[package]]
+name = "snakeviz"
+version = "2.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "tornado" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/04/06/82f56563b16d33c2586ac2615a3034a83a4ff1969b84c8d79339e5d07d73/snakeviz-2.2.2.tar.gz", hash = "sha256:08028c6f8e34a032ff14757a38424770abb8662fb2818985aeea0d9bc13a7d83", size = 182039, upload-time = "2024-11-09T22:03:58.99Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cd/f7/83b00cdf4f114f10750a18b64c27dc34636d0ac990ccac98282f5c0fbb43/snakeviz-2.2.2-py3-none-any.whl", hash = "sha256:77e7b9c82f6152edc330040319b97612351cd9b48c706434c535c2df31d10ac5", size = 183477, upload-time = "2024-11-09T22:03:57.049Z" },
+]
+
+[[package]]
 name = "sqlalchemy"
 version = "2.0.51"
 source = { registry = "https://pypi.org/simple" }
@@ -1131,6 +1147,23 @@ wheels = [
 ]
 
 [[package]]
+name = "tornado"
+version = "6.5.7"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/64/24/95ec527ad67b76d59299e5465b3935d05e4294b7e0290a3924b7487df30b/tornado-6.5.7.tar.gz", hash = "sha256:66c513a76cda70d53907bc27cf1447557699c2e95aa48ba27a442ff61c3ddfc2", size = 519252, upload-time = "2026-06-08T17:34:51.232Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/02/dc/c7043cab6fed8ae159fc1923ce829ada35c4dbd797d408a43858ffaf9639/tornado-6.5.7-cp39-abi3-macosx_10_9_universal2.whl", hash = "sha256:148b2eb15c2c765a50796172c1e499649b35f30d2e3c3d3e15913cfa56bfb163", size = 448543, upload-time = "2026-06-08T17:34:38.052Z" },
+    { url = "https://files.pythonhosted.org/packages/92/4f/090b1431e5a43df696feceffc268c5383cc079ecb5f08ce58f917109aafe/tornado-6.5.7-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:9da38de27f1da3b78a966f0dae12b5a1ea9afe72ca805d84ff06508272ddf100", size = 446707, upload-time = "2026-06-08T17:34:39.594Z" },
+    { url = "https://files.pythonhosted.org/packages/37/d8/ef374952fd5da67d4463122c2b8e5a96536ec10b4b339254c6dcde81d01c/tornado-6.5.7-cp39-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:8d759e71906ee783f8867b93bf26a265743da4c1e2f4a018464c1ba019862972", size = 449774, upload-time = "2026-06-08T17:34:41.204Z" },
+    { url = "https://files.pythonhosted.org/packages/35/37/d434c73f4c6e014b745b9b37085f34f40c022f007efff3d7fe65991899f3/tornado-6.5.7-cp39-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:8a46347a18f23fb92b396beebe0fb78f61dda0cc302445202c16203d8a18848b", size = 450745, upload-time = "2026-06-08T17:34:42.531Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/2b/56b9aff361d7f1ab728a805ec7d7ea835f8807afa9f5cc690ea0e630efb9/tornado-6.5.7-cp39-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:7778b30bef919231265e91c69963ce0f49a1e9c07ac900bbe75b19ce2575ba92", size = 450578, upload-time = "2026-06-08T17:34:43.787Z" },
+    { url = "https://files.pythonhosted.org/packages/02/30/a7444fb23aa76860a14198fab96ac79f1866b0a6e19e26c4381b0938e50f/tornado-6.5.7-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:e726f0c75da7726eec023aa62751ff8878bd2737e34fbdd33b1ae5897d2200f5", size = 449985, upload-time = "2026-06-08T17:34:45.326Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/42/5f0e56c01e8d9d36f4e23f367b85ae6cae0c1ecddd5e6977d8388ad27488/tornado-6.5.7-cp39-abi3-win32.whl", hash = "sha256:f8de3bf12d3efdd0cbe7c8887868198f8a91415e3f29fcf258d9b8eb7b1d9ae4", size = 451047, upload-time = "2026-06-08T17:34:46.784Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/a4/b393076ffb21b469eec5b328a0534cf03a3b90bfc6b1f09507cdd075d938/tornado-6.5.7-cp39-abi3-win_amd64.whl", hash = "sha256:de942f843533a039ef9fa3d9c88c7cd8a7c94553fb5ad0154270989b3d99a2c4", size = 451485, upload-time = "2026-06-08T17:34:48.248Z" },
+    { url = "https://files.pythonhosted.org/packages/71/2e/7b1c769803121b809112cf9a00681c472eae1d80e32d7ec0e0bd61d0d0e1/tornado-6.5.7-cp39-abi3-win_arm64.whl", hash = "sha256:ff934fce95643af5f11efdae618eaa73d469dc588641e5c8d19295a0c65c4796", size = 450506, upload-time = "2026-06-08T17:34:49.702Z" },
+]
+
+[[package]]
 name = "typing-extensions"
 version = "4.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1243,6 +1276,23 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/a0/4f/ac12fda57a55068a094ec42851fb0a40e8489d8941863d517452de62e507/wrapt-2.2.2-cp314-cp314t-win_amd64.whl", hash = "sha256:d09db0f7e8357060d3c38fc22a018aba683a796bf184360fd1a58f6fc180dc77", size = 82462, upload-time = "2026-06-20T23:49:21.631Z" },
     { url = "https://files.pythonhosted.org/packages/48/a7/df732dac86d9b2027c56bd163dbc883e037b16c3469614752e148d219c61/wrapt-2.2.2-cp314-cp314t-win_arm64.whl", hash = "sha256:f32fe639c39561ccc187bcae17e9271be0eb45f1c2952510d2f29b33ab577347", size = 81182, upload-time = "2026-06-20T23:49:23.199Z" },
     { url = "https://files.pythonhosted.org/packages/6e/d2/6317eb6d4554855bbf12d61857774af34747bf88a42c19bf306de67e2fa3/wrapt-2.2.2-py3-none-any.whl", hash = "sha256:5bad217350f19ce99ca5b5e71d406765ea86fe541628426772b657375ee1c048", size = 61460, upload-time = "2026-06-20T23:49:42.966Z" },
+]
+
+[[package]]
+name = "yappi"
+version = "1.7.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9f/47/f7ec7744dff1104560d6276f951a8182f5b805e8d86ece591aebd0512845/yappi-1.7.6.tar.gz", hash = "sha256:c94281936af77c00c6ac2306a0e7f85a67e354d717120df85fcc5dfb9243d4dd", size = 62639, upload-time = "2026-03-17T22:31:40.928Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9e/b3/d3fc45ea2c23c798887e1897a0aac92f8680d109a2381dbfefc70228cbb9/yappi-1.7.6-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:8bf3595e8c1c0326b8012591bc96b72625c7424d4d9fbe4b640b0aafd81f88dc", size = 33342, upload-time = "2026-03-17T22:31:15.116Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/9d/eb1298c95b00891ed1c62262779034bb109d5dea66c4db8546106f698602/yappi-1.7.6-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:e9b018df48bc061248ae1fc36e161e9b4fb2cbbc50a8a0dfb68b9db4608bc9da", size = 33200, upload-time = "2026-03-17T22:31:16.289Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/d5/7b5fb53dff4f9361c88161bd1cd6e47388d57aaba8ae22ead354d37f8ecc/yappi-1.7.6-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:06c0487ab02e3a9722524c8d034feeadbdc2070d6530c38f7483291bf978b800", size = 82974, upload-time = "2026-03-17T22:31:17.125Z" },
+    { url = "https://files.pythonhosted.org/packages/24/d0/0c55c25d74bd4bbe46031fc316927e93fc4b438005db66313ddc02d23bdb/yappi-1.7.6-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:dedd28687f48607db40874629a47bc93d16f1b9c93045f34961620bda76df9d7", size = 82409, upload-time = "2026-03-17T22:31:18.032Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/ff/9a6a783840a595ada5c35355c7a1452846ecc69e44ba192e7c2a1236239e/yappi-1.7.6-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:1e3ef62417c598474a359de6aef92e13ea623416bb0ff45fa4b97e6569120549", size = 80189, upload-time = "2026-03-17T22:31:18.96Z" },
+    { url = "https://files.pythonhosted.org/packages/86/2b/dbb6c82cc6f2b4d642af2b612f8930cb0948f4ede5d0307a4b45cb676932/yappi-1.7.6-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:2b44e7a3187290615877d039bb2f4e232e1b7a5858b314ef6b011bd90447b537", size = 80171, upload-time = "2026-03-17T22:31:19.868Z" },
+    { url = "https://files.pythonhosted.org/packages/a2/37/58c6601a43b9aa69f6c05cc2538ece44b73380349458d5fd397a737514cb/yappi-1.7.6-cp314-cp314-win32.whl", hash = "sha256:5d1d7ba37477da04cc1005784036a535ec5e053cfa09aec7d20e5bc436aedb8c", size = 33481, upload-time = "2026-03-17T22:31:21.074Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/d2/b468708803dcfead2b9c0415189ae89d0c17215c22715ffbc65372c0eccd/yappi-1.7.6-cp314-cp314-win_amd64.whl", hash = "sha256:53b8b8b6ad4f42cb82107c9fa96d103de33f76785e0ce84f5a326e66efc80f64", size = 35816, upload-time = "2026-03-17T22:31:21.95Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/88/5d9bea42f502a3916cd73934a7e4d522856e019a55e3364901c457e9e530/yappi-1.7.6-cp314-cp314-win_arm64.whl", hash = "sha256:b6a189c4b666933218d4bd4b7e1e22d03123120dcba3af4d6c2748ba7efba9ac", size = 33421, upload-time = "2026-03-17T22:31:22.825Z" },
 ]
 
 [[package]]

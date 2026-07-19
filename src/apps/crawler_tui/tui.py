@@ -15,12 +15,12 @@ from typing import (
     cast,
     get_origin,
     Union,
-    Optional,
     Callable,
 )
 
+import yappi
 from diskcache import Cache
-from dotenv import find_dotenv
+from dotenv import find_dotenv, dotenv_values, set_key
 from pydantic import BaseModel
 from rbloom import Bloom
 from sqlalchemy import func, select
@@ -46,7 +46,7 @@ from textual.widgets._option_list import Option
 if TYPE_CHECKING:
     from watchdog.observers import BaseObserver
 
-from crawler.engine import Crawler, QueueRecharger
+from src.crawler.engine import Crawler, QueueRecharger
 from src.common.paths import config_files_folder_path
 from src.configs.crawler_config import CrawlerConfig
 from src.crawler.bootstrap import launch_crawler
@@ -63,6 +63,12 @@ type ConfigsTypes = type[int] | type[float] | type[str] | type[bool] | type[None
 type ConfigsTypesTree = ConfigsTypes | type[list[Any]] | types.GenericAlias | dict[str, ConfigsTypesTree]
 
 class CallbackButton(Button):
+    """Bouton Textual qui exécute une fonction de rappel lorsqu'il est pressé.
+    Cette classe permet de lier simplement une action personnalisée à un clic sur le bouton.
+
+    Attributes:
+        callback (Callable[[], None]): La fonction à appeler lorsque le bouton est pressé.
+    """
     def __init__(self, label: str, callback: Callable[[], None], *args, **kwargs):
         super().__init__(label, *args, **kwargs)
         self.callback = callback
@@ -72,6 +78,14 @@ class CallbackButton(Button):
 
 
 class ThreadManagingWidget(Horizontal):
+    """Widget Textual qui affiche l'état d'un thread crawler et permet de le contrôler.
+    Cette classe fournit des boutons pour mettre en pause, reprendre ou arrêter le thread tout en mettant à jour les métriques affichées.
+
+    Attributes:
+        thread (dict[Crawler | QueueRecharger, tuple[threading.Event, threading.Event]]): Le thread géré avec ses événements de contrôle.
+        pause_button (CallbackButton): Le bouton permettant de mettre le thread en pause.
+        resume_button (CallbackButton): Le bouton permettant de reprendre le thread après une pause.
+    """
     def __init__(self, thread: dict[Crawler | QueueRecharger, tuple[threading.Event, threading.Event]], *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.thread = thread
@@ -82,6 +96,12 @@ class ThreadManagingWidget(Horizontal):
         self.set_interval(1, self.update_labels)
 
     def compose(self) -> ComposeResult:
+        """Construit la vue Textual affichant les informations et contrôles du thread.
+        Cette méthode crée les labels de statut et de métriques ainsi que les boutons d'action pour piloter le thread.
+
+        Returns:
+            ComposeResult: Un générateur de widgets Textual représentant le nom du thread, son statut, ses métriques et les boutons de contrôle.
+        """
         self.pause_button.disabled = False
         self.resume_button.disabled = False
 
@@ -103,6 +123,12 @@ class ThreadManagingWidget(Horizontal):
         self.update_labels()
 
     def update_labels(self) -> None:
+        """Met à jour les libellés du widget selon la langue courante.
+        Cette méthode rafraîchit les textes des boutons et des indicateurs pour refléter la traduction active.
+
+        Returns:
+            None: Cette méthode ne renvoie rien mais met à jour l'affichage du widget.
+        """
         thread = tuple(self.thread.keys())[0]
         status_label = cast(Label, self.query_one("#status_label"))
 
@@ -127,6 +153,12 @@ class ThreadManagingWidget(Horizontal):
         self.query_one("#activity_label", Label).update(activity_text)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Gère les actions de l'utilisateur lorsqu'un bouton du widget est pressé.
+        Cette méthode met à jour l'état du thread et des boutons en fonction du bouton activé.
+
+        Args:
+            event (Button.Pressed): L'événement déclenché lors de l'appui sur un bouton du widget.
+        """
         if event.button == self.query_one("#stop_button"):
             status_label = cast(Label, self.query_one("#status_label"))
             status_label.update(t("thread-stopped"))
@@ -140,6 +172,19 @@ class ThreadManagingWidget(Horizontal):
 
 
 class DashboardPage(Container):
+    """Page Textual qui affiche un tableau de bord des métriques du crawler en temps réel.
+    Cette classe permet de suivre l'activité globale des threads de crawling et de les contrôler collectivement.
+
+    Attributes:
+        cache (Cache | None): Cache utilisé pour compter le nombre de domaines visités.
+        crawled_urls_bf (Bloom | None): Bloom filter permettant d'estimer le nombre d'URL déjà crawlées.
+        _engine: Moteur de base de données utilisé pour interroger les tables de crawl.
+        crawlers (list[dict[Crawler, tuple[threading.Event, threading.Event]]]): Liste des crawlers avec leurs événements de contrôle.
+        queue_recharger (dict[QueueRecharger, tuple[threading.Event, threading.Event]]): Thread chargé de réalimenter la file d'attente avec ses événements de contrôle.
+        _last_crawled_count (int | None): Dernier nombre d’URLs crawlées utilisé pour calculer le débit.
+        _last_sample_time (float | None): Timestamp de la dernière mesure de débit de crawl.
+        _last_waiting_count (int | None): Dernier nombre d’URLs en attente, utilisé pour calculer la tendance.
+    """
     def __init__(self, crawlers: list[dict[Crawler, tuple[threading.Event, threading.Event]]], queue_recharger: dict[QueueRecharger, tuple[threading.Event, threading.Event]], cache: Cache | None = None, crawled_urls_bf: Bloom | None = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -155,6 +200,12 @@ class DashboardPage(Container):
         self._last_waiting_count: int | None = None
 
     def compose(self) -> ComposeResult:
+        """Construit la disposition de la page de tableau de bord du crawler.
+        Cette méthode assemble les tuiles de statistiques globales, la barre d’outils de contrôle et la liste des threads.
+
+        Returns:
+            ComposeResult: Un générateur de widgets Textual représentant les métriques, les contrôles et les threads gérés par le tableau de bord.
+        """
         with Horizontal(classes="stats-row"):
             with Container(classes="stat-tile"):
                 yield Label("--", id="domains", classes="stat-value")
@@ -208,6 +259,12 @@ class DashboardPage(Container):
                     yield ThreadManagingWidget(crawler)
 
     def retranslate(self) -> None:
+        """Met à jour tous les libellés du tableau de bord selon la langue active.
+        Cette méthode rafraîchit les textes des tuiles de statistiques et des contrôles pour refléter la traduction courante.
+
+        Returns:
+            None: Cette méthode ne renvoie rien mais met à jour l'affichage des différents widgets du tableau de bord.
+        """
         self.query_one("#domains_label", Label).update(t("dashboard-domains-visited"))
         self.query_one("#crawled_pages_label", Label).update(t("dashboard-pages-crawled"))
         self.query_one("#crawl_rate_label", Label).update(t("dashboard-pages-per-minute"))
@@ -225,6 +282,12 @@ class DashboardPage(Container):
         self.set_interval(5, self.update_content)
 
     def update_content(self):
+        """Met à jour périodiquement les métriques et compteurs affichés sur le tableau de bord.
+        Cette méthode rafraîchit les valeurs issues de la base de données, des logs et des filtres en fonction de l'état courant du crawler.
+
+        Returns:
+            None: Cette méthode ne renvoie rien mais met à jour les labels de statistiques globales du tableau de bord.
+        """
         now = time.time()
 
         # noinspection PyBroadException
@@ -250,6 +313,12 @@ class DashboardPage(Container):
             self.query_one("#uptime", Label).update(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
 
     def _extracted_from_update_content_6(self, now):
+        """Calcule et met à jour les métriques détaillées du tableau de bord à partir de la base de données.
+        Cette méthode rafraîchit le nombre de pages crawlées, de domaines, le débit et la tendance des URLs en attente.
+
+        Args:
+            now (float): Horodatage actuel utilisé pour calculer le débit de crawl sur la période écoulée.
+        """
         with self._engine.connect() as conn:
             num_crawled_urls = cast(int, conn.scalar(select(func.count()).select_from(CrawledURL)))
             num_urls_in_waiting_list = cast(int, conn.scalar(select(func.count()).select_from(WaitingURL)))
@@ -278,6 +347,18 @@ class DashboardPage(Container):
 
 
 class LogsPage(Log):
+    """Page Textual d'affichage des logs du crawler avec filtrage par niveau et source.
+    Cette classe permet de sélectionner un crawler, d'ajuster le seuil de logs et d'afficher les messages en temps réel.
+
+    Attributes:
+        BINDINGS (list[Binding]): Raccourcis clavier pour revenir à l'accueil et changer le niveau de logs.
+        log_history (deque[tuple[int, str, str]]): Historique circulaire des messages de log (niveau, nom du crawler, contenu brut).
+        levels (list[int]): Liste ordonnée des niveaux numériques disponibles pour le filtrage des logs.
+        _crawler_name (str): Nom du crawler actuellement sélectionné pour l'affichage des logs.
+        current_level_index (int): Index courant dans la liste `levels` qui détermine le seuil de log actif.
+        buffer_lock (threading.Lock): Verrou protégeant l'accès concurrent au buffer de logs.
+        log_buffer (list[tuple[int, str, str]]): Buffer temporaire des messages à tirer périodiquement vers l'affichage.
+    """
     BINDINGS = [
         Binding("escape", "back_to_home", t("logs-back")),
         Binding("backspace", "back_to_home", t("logs-back")),
@@ -308,6 +389,12 @@ class LogsPage(Log):
         self._update_status_bar()
 
     def _update_status_bar(self) -> None:
+        """Met à jour la barre de statut de la page des logs en fonction du crawler et du niveau courant.
+        Cette méthode informe la vue parent de l'état actuel du filtre pour que l’interface reflète les paramètres de journalisation actifs.
+
+        Returns:
+            None: Cette méthode ne renvoie rien mais met à jour le texte affiché dans la barre de statut des logs.
+        """
         home: LogsHomePage = self.app.logs_home_page
         home.update_status_bar(t("logs-status-bar", crawler=self.crawler_name, level=self.current_level_name))
 
@@ -315,12 +402,24 @@ class LogsPage(Log):
         self.set_interval(0.2, self.pull_logs)
 
     def action_back_to_home(self) -> None:
+        """Revient à l’écran d’accueil de sélection de la source des logs.
+        Cette action réinitialise la vue et le texte de statut afin de permettre à l’utilisateur de choisir un autre flux de journalisation.
+
+        Returns:
+            None: Cette méthode ne renvoie rien mais modifie la vue active et la barre de statut de la page des logs.
+        """
         home: LogsHomePage = self.app.logs_home_page
         home.query_one(ContentSwitcher).current = "option_list"
         home.update_status_bar(t("logs-select-source"))
         home.focus()
 
     def pull_logs(self):
+        """Transfère périodiquement les messages du buffer de logs vers l'affichage.
+        Cette méthode filtre les messages selon le niveau et la source sélectionnés avant de les écrire dans la vue Textual.
+
+        Returns:
+            None: Cette méthode ne renvoie rien mais met à jour le contenu visible des logs et déclenche un rafraîchissement de l'interface.
+        """
         with self.buffer_lock:
             if not self.log_buffer:
                 return
@@ -375,6 +474,12 @@ class LogsPage(Log):
             self._update_status_bar()
 
     def _refresh_logs(self):
+        """Augmente le seuil de niveau de log utilisé pour filtrer les messages affichés.
+        Cette action passe au niveau de gravité supérieur et déclenche un rafraîchissement du contenu et de la barre de statut.
+
+        Returns:
+            None: Cette méthode ne renvoie rien mais met à jour le filtre de logs et l'affichage de la page.
+        """
         self.clear()
         threshold = self.current_level_no
 
@@ -392,11 +497,23 @@ class LogsPage(Log):
             self.refresh()
 
 class LogsHomePage(Container):
+    """Augmente le seuil de niveau de log pour restreindre les messages affichés aux plus importants.
+    Cette action passe au niveau de gravité immédiatement supérieur puis réapplique le filtre et met à jour la barre de statut.
+
+    Returns:
+        None: Cette méthode ne renvoie rien mais modifie le niveau de filtrage des logs et rafraîchit l’affichage associé.
+    """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.logs_page = LogsPage(id="logs_page")
 
     def compose(self) -> ComposeResult:
+        """Construit la vue d’accueil de sélection et de consultation des sources de logs.
+        Cette méthode assemble la barre de statut et le commutateur de contenu permettant de choisir un crawler ou d’afficher la page détaillée des logs.
+
+        Returns:
+            ComposeResult: Un générateur de widgets Textual contenant la barre de statut, la liste des sources de logs et la page d’affichage associée.
+        """
         yield Label(t("logs-select-source"), id="logs_status_bar", classes="logs-status-bar")
         with ContentSwitcher(initial="option_list"):
             yield self.logs_page
@@ -409,6 +526,12 @@ class LogsHomePage(Container):
             )
 
     def retranslate(self) -> None:
+        """Met à jour les libellés et textes de la page d’accueil des logs selon la langue active.
+        Cette méthode ajuste la barre de statut et les options de la liste des crawlers pour refléter la traduction courante.
+
+        Returns:
+            None: Cette méthode ne renvoie rien mais rafraîchit les textes affichés sur la page d’accueil des logs.
+        """
         content_switcher = self.query_one(ContentSwitcher)
         if content_switcher.current == "option_list":
             self.update_status_bar(t("logs-select-source"))
@@ -420,12 +543,25 @@ class LogsHomePage(Container):
         self.query_one("#logs_status_bar", Label).update(text)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Active l’affichage de la page de logs pour la source sélectionnée.
+        Cette méthode bascule le commutateur de contenu sur la vue des logs, cible le crawler choisi et donne le focus à la page correspondante.
+
+        Args:
+            event (OptionList.OptionSelected): L’événement déclenché lors de la sélection d’une option de source de logs.
+        """
         self.query_one(ContentSwitcher).current = "logs_page"
         self.logs_page.crawler_name = event.option_id
         self.logs_page.focus()
 
 
 class DatabaseConsolePage(Container):
+    """Page Textual offrant une console PostgreSQL intégrée pour administrer la base de données du crawler.
+    Cette classe gère la saisie des identifiants administrateur, la persistance dans le .env et l'exécution de requêtes SQL via psql.
+
+    Attributes:
+        BINDINGS (list[Binding]): Raccourcis clavier permettant d'exécuter la requête en cours dans la console SQL.
+        DEFAULT_CSS (str): Feuille de style CSS utilisée pour ajuster l'affichage des champs de connexion et de la console.
+    """
     BINDINGS = [
         Binding("f5", "execute_query", t("database-execute-f5")),
         Binding("ctrl+j", "execute_query", t("database-execute-ctrl-enter")),
@@ -452,6 +588,12 @@ class DatabaseConsolePage(Container):
         super().__init__(id=id)
 
     def compose(self) -> ComposeResult:
+        """Construit la vue de la console de base de données avec les écrans de connexion et d'exécution SQL.
+        Cette méthode assemble le formulaire de saisie des identifiants administrateur et la console PostgreSQL interactive.
+
+        Returns:
+            ComposeResult: Un générateur de widgets Textual comprenant le sélecteur de vue, le formulaire de connexion, l’éditeur SQL et le log de résultats.
+        """
         with ContentSwitcher(id="db_view_switcher"):
             # --- VUE 1 : FORMULAIRE DE CONNEXION ---
             with Container(id="login_view"):
@@ -517,7 +659,13 @@ class DatabaseConsolePage(Container):
 
     @staticmethod
     def update_env_file(key: str, value: str) -> None:
-        """Met à jour ou ajoute une clé/valeur dans le fichier .env de la racine du projet."""
+        """Met à jour ou ajoute une variable d'environnement dans le fichier .env du projet.
+        Cette méthode garantit la présence du fichier, remplace la valeur existante de la clé ou l'ajoute proprement en fin de fichier.
+
+        Args:
+            key (str): Nom de la variable d'environnement à écrire ou mettre à jour dans le fichier .env.
+            value (str): Valeur à associer à la clé spécifiée, écrite sous la forme `KEY=VALUE`.
+        """
         filepath = ".env"
 
         # On s'assure que le fichier existe, sinon on le crée
@@ -549,7 +697,15 @@ class DatabaseConsolePage(Container):
 
     @staticmethod
     def interpret_postgres_error(output: str) -> str:
-        """Analyse le message brut renvoyé par Postgres pour en faire une alerte claire."""
+        """Interprète un message d'erreur brut de PostgreSQL en texte lisible pour l'utilisateur.
+        Cette méthode détecte les principaux cas d'erreur de connexion ou de configuration et renvoie la traduction appropriée.
+
+        Args:
+            output (str): Sortie texte complète retournée par la commande psql lors d'une tentative de connexion ou d'exécution.
+
+        Returns:
+            str: Message d'erreur contextualisé et traduit décrivant la cause probable du problème de connexion ou de requête.
+        """
         if "password authentication failed" in output:
             return t("database-wrong-password")
         elif "role" in output and "does not exist" in output:
@@ -566,7 +722,12 @@ class DatabaseConsolePage(Container):
         return t("database-generic-connection-error")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Gère les actions des boutons de la page console (affichage du mot de passe, test de connexion et édition des identifiants).
+        Cette méthode orchestre la vérification des champs, la tentative de connexion psql, la persistance des identifiants et le basculement entre les vues.
 
+        Args:
+            event (Button.Pressed): L'événement émis par Textual lorsqu'un des boutons de la page console est pressé.
+        """
         # --- 1. AFFICHER / MASQUER LE MOT DE PASSE ---
         if event.button.id == "toggle_password":
             pass_input = self.query_one("#admin_pass_input", Input)
@@ -677,6 +838,12 @@ class DatabaseConsolePage(Container):
         return self.query_one("#logs", RichLog)
 
     async def action_execute_query(self) -> None:
+        """Exécute la requête SQL saisie dans l’éditeur au sein de la console PostgreSQL intégrée.
+        Cette méthode gère les validations de base, interdit les changements de connexion et journalise le résultat ou les erreurs dans la vue de logs.
+
+        Returns:
+            None: Cette méthode ne renvoie rien mais envoie la requête au processus psql et met à jour le log de la console avec la sortie correspondante.
+        """
         if (
             self.query_one("#db_view_switcher", ContentSwitcher).current
             != "console_view"
@@ -741,6 +908,13 @@ class DatabaseConsolePage(Container):
 
 
 class ConfigInput(Input):
+    """Champ de saisie Textual spécialisé pour l’édition d’une valeur de configuration du crawler.
+    Cette classe associe chaque input à son type cible et à son chemin dans l’arbre de configuration pour permettre une validation et une sauvegarde précises.
+
+    Attributes:
+        config_type (ConfigsTypes): Type attendu pour la valeur saisie, utilisé pour la validation et le parsing.
+        config_path (list[str | int]): Chemin dans la configuration pointant vers la clé ou l’index à mettre à jour.
+    """
     def __init__(
         self,
         config_type: ConfigsTypes,
@@ -770,6 +944,13 @@ class ConfigInput(Input):
 
 
 class ConfigsPage(Container):
+    """Page Textual d’édition interactive de la configuration du crawler.
+    Cette classe génère dynamiquement les champs de saisie à partir du modèle Pydantic, applique des restrictions de format et enregistre les modifications.
+
+    Attributes:
+        config (CrawlerConfig): Instance de configuration actuellement éditée dans l’interface.
+        type_restrictions (dict[type, str]): Expressions régulières de saisie associées aux types scalaires pour guider et valider l’entrée utilisateur.
+    """
     def __init__(self, config: CrawlerConfig, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -785,7 +966,15 @@ class ConfigsPage(Container):
 
     @staticmethod
     def _unwrap_union_type(tp: ConfigsTypesTree) -> ConfigsTypesTree:
-        """Extrait le type sous-jacent d'une Union ou d'un Optional."""
+        """Simplifie un type Union de configuration en retirant l’option None lorsqu’elle est seule alternative.
+        Cette méthode permet de récupérer le type effectif à utiliser pour le rendu et la validation des champs de configuration scalaires ou imbriqués.
+
+        Args:
+            tp (ConfigsTypesTree): Type ou arbre de types issu du modèle Pydantic, potentiellement composé d’Unions.
+
+        Returns:
+            ConfigsTypesTree: Type de configuration nettoyé, sans Union optionnel superflu, ou le type original s’il ne peut être simplifié.
+        """
         origin = get_origin(tp)
         if origin is Union or isinstance(tp, types.UnionType):
             non_none_types = [arg for arg in get_args(tp) if arg is not type(None)]
@@ -794,7 +983,15 @@ class ConfigsPage(Container):
         return tp
 
     def get_restriction(self, tp: ConfigsTypes) -> str:
-        """Détermine la regex de saisie pour un type donné (gère les Unions)."""
+        """Construit une expression régulière de restriction adaptée au type de configuration fourni.
+        Cette méthode gère notamment les Unions en combinant les patterns autorisés pour guider et valider la saisie utilisateur dans les champs de configuration.
+
+        Args:
+            tp (ConfigsTypes): Type de configuration pour lequel déterminer une règle de restriction de saisie.
+
+        Returns:
+            str: Pattern de restriction à utiliser par les champs de saisie, couvrant les formats acceptés pour le type ou l’Union donnée.
+        """
         origin = get_origin(tp)
 
         if origin is Union or isinstance(tp, types.UnionType):
@@ -819,7 +1016,19 @@ class ConfigsPage(Container):
             value_str: str,
         target_type: type[int] | type[float] | type[str] | type[bool] | type[None],
     ) -> int | float | str | bool | None:
-        """Convertit une chaîne brute vers son type scalaire cible de manière explicite."""
+        """Convertit une chaîne saisie par l'utilisateur en valeur scalaire du type cible.
+        Cette méthode applique des règles strictes pour les booléens et les valeurs nulles, et signale clairement les erreurs de conversion ou de type non supporté.
+
+        Args:
+            value_str (str): Texte brut issu du champ de configuration à convertir.
+            target_type (type[int] | type[float] | type[str] | type[bool] | type[None]): Type scalaire attendu pour la valeur, utilisé pour choisir la conversion.
+
+        Returns:
+            int | float | str | bool | None: Valeur convertie dans le type demandé si la chaîne respecte le format attendu.
+
+        Raises:
+            ValueError: Si la chaîne ne correspond pas au format requis, ne peut pas être convertie ou si le type demandé n'est pas supporté.
+        """
         value_stripped = value_str.strip()
 
         if target_type is type(None):
@@ -852,7 +1061,19 @@ class ConfigsPage(Container):
     def parse_value(
         self, value_str: str, config_type: ConfigsTypes
     ) -> int | float | str | bool | None:
-        """Tente de parser la saisie utilisateur vers le type cible ou l'un des types de l'Union."""
+        """Interprète une chaîne de configuration en valeur typée en respectant les Unions et les valeurs nulles.
+        Cette méthode tente successivement les types possibles d’un Union, gère explicitement "None" et renvoie des erreurs claires si aucun type ne correspond.
+
+        Args:
+            value_str (str): Valeur saisie par l'utilisateur dans le champ de configuration.
+            config_type (ConfigsTypes): Type de configuration attendu, éventuellement composé d'un Union de types scalaires et de None.
+
+        Returns:
+            int | float | str | bool | None: Valeur convertie dans l’un des types autorisés par la configuration, ou None si la chaîne représente une valeur nulle.
+
+        Raises:
+            ValueError: Si aucune des variantes de type de l'Union ne peut être utilisée pour convertir la chaîne donnée.
+        """
         origin = get_origin(config_type)
 
         if origin is Union or isinstance(config_type, types.UnionType):
@@ -882,6 +1103,12 @@ class ConfigsPage(Container):
             self.config.model_dump(),
             self.get_type_tree(CrawlerConfig),
         ):
+            """Construit dynamiquement l’interface d’édition de configuration à partir du modèle du crawler.
+            Cette méthode produit les sections et champs de saisie Textual en appliquant l’indentation, les labels et les règles de restriction adaptées à chaque type.
+
+            Returns:
+                ComposeResult: Un générateur de widgets représentant les titres de sections et les lignes de configuration éditables.
+            """
             leading_spaces = len(key) - len(key.lstrip(" "))
             indent_level = min(leading_spaces // 2, 4)
             display_key = key.strip()
@@ -902,6 +1129,12 @@ class ConfigsPage(Container):
                 )
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Valide et enregistre une valeur de configuration lorsque l'utilisateur soumet un champ.
+        Cette méthode vérifie le format selon les restrictions, convertit la chaîne dans le type attendu, met à jour le modèle et persiste la configuration sur disque.
+
+        Args:
+            event (Input.Submitted): Événement Textual contenant le champ soumis et la valeur saisie.
+        """
         config_input = cast(ConfigInput, event.input)
 
         if config_input.restrict and not re.match(config_input.restrict, event.value):
@@ -919,6 +1152,13 @@ class ConfigsPage(Container):
         self.notify(t("config-saved"), severity="information")
 
     def set_config_value(self, path: list[str | int], value: Any) -> None:
+        """Applique une nouvelle valeur dans l’arbre de configuration à l’emplacement indiqué par le chemin.
+        Cette méthode navigue dans les attributs et les collections du modèle jusqu’à la feuille ciblée, puis met à jour la clé ou l’index correspondant.
+
+        Args:
+            path (list[str | int]): Chemin hiérarchique menant à la valeur de configuration à modifier, composé de noms d’attributs et d’indices de liste.
+            value (Any): Nouvelle valeur typée à enregistrer dans la configuration à l’emplacement désigné.
+        """
         obj = self.config
 
         for key in path[:-1]:
@@ -932,6 +1172,15 @@ class ConfigsPage(Container):
             setattr(obj, last, value)
 
     def get_type_tree(self, model: type[BaseModel]) -> ConfigsTypesTree:
+        """Construit un arbre de types reflétant la structure du modèle de configuration Pydantic.
+        Cette méthode déroule récursivement les sous-modèles pour associer à chaque champ soit un type scalaire, soit un sous-arbre correspondant.
+
+        Args:
+            model (type[BaseModel]): Classe Pydantic représentant la configuration racine ou une sous-section de configuration.
+
+        Returns:
+            ConfigsTypesTree: Arbre de types indiquant pour chaque clé de configuration son type de base ou la structure imbriquée à utiliser.
+        """
         result = {}
 
         for name, field in model.model_fields.items():
@@ -959,7 +1208,19 @@ class ConfigsPage(Container):
         ],
         None,
         None,
-    ]:
+    ]:  # sourcery skip: low-code-quality
+        """Déplie récursivement le dictionnaire de configuration en lignes prêtes à être affichées dans l’éditeur.
+        Cette méthode produit pour chaque entrée le libellé, la valeur, le type et le chemin permettant de reconstruire l’interface et de cibler les mises à jour.
+
+        Args:
+            config_dict (dict[str, Any] | list[Any] | None): Structure de configuration actuelle, éventuellement imbriquée ou sous forme de liste.
+            config_type_dict (ConfigsTypesTree): Arbre de types correspondant à la configuration, utilisé pour distinguer sections, listes et valeurs scalaires.
+            path (list[str | int] | None): Chemin accumulé jusqu’à la section ou l’élément courant, utilisé pour suivre la position dans l’arbre.
+
+        Returns:
+            Generator[tuple[str, str, ConfigsTypes | type[dict[str, Any]] | type[list[Any]], list[str | int]], None, None]:
+                Générateur de tuples décrivant chaque champ ou section à rendre dans l’interface de configuration.
+        """
         if path is None:
             path = []
 
@@ -1023,22 +1284,25 @@ class ConfigsPage(Container):
                 
                 
 class SecretsConfigsPage(Container):
+    """Page Textual dédiée à la consultation et à la modification des secrets stockés dans le fichier .env.
+    Cette classe permet d’afficher les valeurs de manière masquée ou visible, de les éditer champ par champ et de les persister en toute sécurité.
+
+    Attributes:
+        all_hidden (bool): Indique si tous les champs de secrets doivent être masqués (mode mot de passe) ou affichés en clair.
+    """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.dotenv: Optional[str] = None
-        if dotenv_file_path := find_dotenv():
-            with open(dotenv_file_path, mode="r", encoding="utf-8") as f:
-                self.dotenv = f.read()
-
         self.all_hidden = True
 
-    def on_mount(self) -> None:
-        for input_widget in self.query(Input):
-            input_widget.data = input_widget.value
-
     def compose(self) -> ComposeResult:
-        if not self.dotenv:
+        """Construit l’interface d’édition des secrets à partir du contenu du fichier .env.
+        Cette méthode génère une barre d’outils pour afficher ou masquer globalement les valeurs, puis une liste de lignes éditables pour chaque clé non commentée.
+
+        Returns:
+            ComposeResult: Un générateur de widgets Textual représentant la barre d’outils et les champs de saisie des secrets.
+        """
+        if not find_dotenv():
             self.notify(t("secrets-file-not-found"), severity="warning")
             return
 
@@ -1050,18 +1314,13 @@ class SecretsConfigsPage(Container):
                 id="toggle_all_secrets",
             )
 
-        for line in self.dotenv.strip().splitlines():
-            if not line or line.startswith("#"):
+        for key, value in dotenv_values(find_dotenv()).items():
+            if value is None:
                 continue
-
-            split_line = line.split("=", maxsplit=1)
-            if len(split_line) != 2:
-                continue
-
-            key = split_line[0]
+                
             with Horizontal(classes="secret-row"):
                 yield Label(f"{key}=", classes="secret-label")
-                yield Input(value=split_line[1], id=key, password=True)
+                yield Input(value=value, id=key, password=True)
                 yield CallbackButton(
                     "🙈",
                     callback=lambda key=key: self.toggle_secret(key),
@@ -1069,6 +1328,12 @@ class SecretsConfigsPage(Container):
                 )
 
     def toggle_secret(self, key: str) -> None:
+        """Inverse l’affichage masqué ou visible d’un secret individuel dans l’interface.
+        Cette méthode bascule le mode mot de passe du champ ciblé et met à jour l’icône du bouton associé pour refléter l’état courant.
+
+        Args:
+            key (str): Nom de la variable de secret correspondant au champ à afficher ou masquer.
+        """
         input_widget = self.query_one(f"#{key}", Input)
         # noinspection PyInvalidCast
         row = cast(Horizontal, input_widget.parent)
@@ -1078,6 +1343,12 @@ class SecretsConfigsPage(Container):
         toggle_button.label = "🙈" if input_widget.password else "👁"
 
     def toggle_all_secrets(self) -> None:
+        """Bascule l’affichage masqué ou visible de l’ensemble des secrets de la page.
+        Cette méthode met à jour le mode mot de passe de tous les champs, ajuste les icônes individuelles et change le libellé du bouton global en conséquence.
+
+        Returns:
+            None: Cette méthode ne renvoie rien mais modifie l’état d’affichage de tous les champs de secrets et de leurs boutons de contrôle.
+        """
         self.all_hidden = not self.all_hidden
 
         for input_widget in self.query(Input):
@@ -1097,7 +1368,7 @@ class SecretsConfigsPage(Container):
         )
 
     def on_input_submitted(self, event: Input.Submitted):
-        if not self.dotenv:
+        if not find_dotenv():
             self.notify(t("secrets-file-not-found"), severity="warning")
             return
 
@@ -1105,19 +1376,23 @@ class SecretsConfigsPage(Container):
             self.notify(t("secrets-value-empty"), severity="error")
             return
 
-        # noinspection PyUnresolvedReferences
-        self.dotenv = self.dotenv.replace(
-            f"{event.input.id}={event.input.data}",
-            f"{event.input.id}={event.value}",
-        )
-        event.input.data = event.value
-        with open(find_dotenv(), mode="w", encoding="utf-8") as f:
-            f.write(cast(str, self.dotenv))
+        set_key(find_dotenv(), cast(str, event.input.id), event.value)
 
         self.notify(t("secrets-saved"), severity="information")
 
 
 class CrawlerTerminalApp(App):
+    """Application Textual principale pour le pilotage et la supervision du crawler.
+    Cette classe orchestre le démarrage des workers, la navigation entre les pages (dashboard, logs, base de données, configuration, secrets) et la gestion propre de l’arrêt.
+
+    Attributes:
+        CSS_PATH (str): Chemin vers la feuille de styles Textual utilisée pour l’apparence de l’application.
+        TITLE (str): Titre affiché dans l’interface, traduit dynamiquement selon la langue courante.
+        BINDINGS (list[Binding]): Raccourcis clavier déclarés pour l’application, notamment le basculement de langue.
+        crawlers (list[dict[Crawler, tuple[threading.Event, threading.Event]]]): Liste des crawlers en cours, associant chaque instance à ses événements de pause et d’arrêt.
+        queue_recharger (dict[QueueRecharger, tuple[threading.Event, threading.Event]]): Tâche de rechargement de file d’attente, avec ses événements de contrôle de cycle de vie.
+        observer (BaseObserver): Observateur de système de fichiers ou de ressources, suivi pour être correctement arrêté lors de la fermeture.
+    """
     CSS_PATH = "crawler_tui.tcss"
     TITLE = t("app-title")
 
@@ -1145,6 +1420,12 @@ class CrawlerTerminalApp(App):
         self.start_time: float | None = None
         
     def start_crawlers(self, args: argparse.Namespace):
+        """Initialise et lance les workers du crawler ainsi que les tâches associées.
+        Cette méthode prépare les événements de contrôle, démarre les threads via `launch_crawler` et enregistre l’heure de début pour le suivi de session.
+
+        Args:
+            args (argparse.Namespace): Arguments de ligne de commande ou paramètres de configuration utilisés pour initialiser le comportement des crawlers.
+        """
         self.stop_events = [
             threading.Event() for _ in range(self.config.num_crawlers + 1)
         ]
@@ -1158,6 +1439,12 @@ class CrawlerTerminalApp(App):
 
     @override
     def compose(self):
+        """Construit la mise en page principale de l’application en assemblant les différents onglets et pages.
+        Cette méthode initialise le sélecteur de contenu, relie chaque onglet à sa vue correspondante et ajoute en-tête et pied de page pour la navigation générale.
+
+        Returns:
+            ComposeResult: Un générateur de widgets Textual représentant l’en-tête, les onglets, le contenu associé et le pied de page de l’application.
+        """
         yield Header()
 
         yield Tabs(
@@ -1178,13 +1465,24 @@ class CrawlerTerminalApp(App):
         yield Footer()
 
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
-        """Appelé lorsqu'un onglet est activé (Entrée ou clic)."""
+        """Gère le changement d’onglet dans l’interface en activant la vue correspondante.
+        Cette méthode synchronise le sélecteur de contenu avec l’onglet choisi et déplace le focus clavier vers la page nouvellement affichée.
+
+        Args:
+            event (Tabs.TabActivated): Événement Textual indiquant l’identifiant de l’onglet qui vient d’être activé.
+        """
         switcher = self.query_one(ContentSwitcher)
         switcher.current = event.tab.id
 
         self.query_one(f"#{event.tab.id}").focus()
 
     def action_toggle_language(self) -> None:
+        """Bascule la langue de l’interface utilisateur vers la prochaine locale disponible.
+        Cette méthode met à jour les textes affichés en appelant `retranslate` afin de refléter immédiatement le nouveau choix de langue.
+
+        Returns:
+            None: Cette méthode ne renvoie rien mais modifie la locale active et rafraîchit les libellés de l’interface.
+        """
         set_locale(next_locale())
         self.retranslate()
 
@@ -1212,6 +1510,12 @@ class CrawlerTerminalApp(App):
 
     @override
     async def action_quit(self) -> None:
+        """Arrête proprement l’application en signalant la fin des crawlers et des tâches associées.
+        Cette méthode déclenche les événements d’arrêt, attend la terminaison des threads et de l’observateur, puis délègue la fermeture finale à Textual.
+
+        Returns:
+            None: Cette méthode ne renvoie rien mais garantit la libération correcte des ressources et des threads avant la sortie de l’application.
+        """
         for stop_event in self.stop_events:
             stop_event.set()
         self.observer.stop()
@@ -1223,11 +1527,21 @@ class CrawlerTerminalApp(App):
             self.observer.join()
         
         await asyncio.to_thread(join_threads)
+
+        yappi.stop()
+        # Enregistre au format pstat
+        yappi.get_func_stats().save("crawler_profile.prof", type="pstat")
         
         await super().action_quit()
 
 
 class TextualSink:
+    """Redirige les messages de logs vers l’interface Textual du crawler en appliquant un niveau de filtrage par défaut.
+    Cette classe sert de sink pour Loguru et met à jour la page des logs en ajoutant les messages dans un tampon circulaire thread-safe.
+
+    Attributes:
+        app (CrawlerTerminalApp): Instance de l’application Textual dans laquelle les logs doivent être affichés.
+    """
     def __init__(
         self,
         app: CrawlerTerminalApp,
@@ -1248,6 +1562,12 @@ class TextualSink:
         self.app.logs_home_page.logs_page.current_level_index = level_map.get(default_ui_level, 2)
 
     def write(self, message: Message):
+        """Ajoute un message de log au tampon d’affichage de l’interface Textual.
+        Cette méthode extrait le niveau, le nom de thread et le texte brut du message, puis les enregistre de manière circulaire dans le buffer des logs.
+
+        Args:
+            message (Message): Message Loguru à enregistrer, contenant les métadonnées de niveau et de thread ainsi que le texte formaté.
+        """
         level_no = message.record["level"].no
         crawler_name = message.record["thread"].name
 

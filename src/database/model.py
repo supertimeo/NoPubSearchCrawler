@@ -10,7 +10,7 @@ class URL(Base):
     __tablename__ = "urls"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    url: Mapped[str] = mapped_column(String(1024), unique=True, index=True)
+    url: Mapped[str] = mapped_column(String(2048), unique=True, index=True)
 
 
 class Page(Base):
@@ -73,6 +73,10 @@ class WaitingURL(Base):
     )
     url: Mapped["URL"] = relationship(cascade="")
     domain_crawled_at: Mapped[float] = mapped_column(index=True)
+
+    __table_args__ = {
+        "postgresql_unlogged": True,
+    }
 
 
 class CrawledURL(Base):

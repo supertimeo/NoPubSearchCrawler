@@ -13,6 +13,14 @@ from .tui import CrawlerTerminalApp  # noqa: E402
 
 
 def parsing_arguments() -> argparse.Namespace:
+    """Analyse les arguments de la ligne de commande pour configurer les options de nettoyage.
+    Cette fonction prépare l'espace de noms contenant les indicateurs activés par l'utilisateur.
+
+    Returns:
+        argparse.Namespace: L'espace de noms issu de l'analyse de la ligne de commande,
+            incluant les options de suppression des journaux, du cache, de la base de
+            données ou de l'ensemble des données.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "-l", "--delete-logs", action="store_true", help="Delete the logs"
@@ -33,6 +41,12 @@ def parsing_arguments() -> argparse.Namespace:
 
 
 def main():
+    """Lance l'application TUI de crawler avec la configuration courante.
+    Cette fonction orchestre l'initialisation de l'environnement, du cache, du logger et des crawlers.
+
+    Returns:
+        None: Cette fonction ne renvoie rien, elle exécute l'application TUI jusqu'à sa fermeture.
+    """
     args = parsing_arguments()
 
     validate_environment()
