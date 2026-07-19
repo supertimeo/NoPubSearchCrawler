@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 import re
+import socket
 # import pour la gestion des threads
 import threading
 import time
@@ -12,6 +14,7 @@ from urllib.parse import urlparse, urljoin, urlunparse, parse_qsl, urlencode
 
 # import pour le scraping et le crawling
 import urllib3
+from cachetools import TTLCache
 # import pour la gestion du cache
 from diskcache import Cache
 # import pour la gestion des logs
@@ -278,6 +281,9 @@ class Crawler(threading.Thread):
         self.crawler_id = crawler_id
         self.remove_params = remove_params
         self.cache = cache
+
+        self.domain_errors_count_cache = TTLCache(maxsize=1000, ttl=600)
+        self.down_domains_cache = TTLCache(maxsize=math.inf, ttl=3600)
         
         self.config = CrawlerConfig.load_from_yml(crawler_config_file_path)
 
@@ -581,7 +587,17 @@ class Crawler(threading.Thread):
 
         return {url.url: url for url in url_orm_obj}
 
-    def run(self):  # sourcery skip: low-code-quality
+    @staticmethod
+    def tcp_ping(domain, port=443, timeout=5):
+        start = time.perf_counter()
+
+        try:
+            with socket.create_connection((domain, port), timeout):
+                return (time.perf_counter() - start) * 1000
+        except OSError:
+            return None
+
+    def run(self):    # sourcery skip: low-code-quality
         """Exécute la boucle principale du thread de crawler. Coordonne la récupération des URLs, leur filtrage, le respect des délais de crawl et l’enregistrement des résultats en base de données.
 
         Cette méthode gère les signaux de pause et d’arrêt, contrôle les accès concurrents aux structures partagées et orchestre le cycle complet de traitement d’une URL, depuis la file de priorité jusqu’à la persistance des pages et des liens. Elle met à jour les compteurs internes, les temps de crawl par domaine et le bloom filter jusqu’à ce qu’un arrêt soit demandé via `stop_event`.
@@ -590,7 +606,7 @@ class Crawler(threading.Thread):
         with self.logger.catch(level=LoggingLevels.CRITICAL, message=f"A fatal, unexpected error occurred in the run loop of {self.name} ({self.native_id}). The thread is stopping."):
             self.logger.info(f"Crawler {self.name} started")
             time.sleep(5) # Attente de 5 secondes pour permettre le démarrage des threads
-            
+
             while not self.stop_event.is_set():
                 # Récupération d'une page à crawler
                 if self.pause_event.is_set():
@@ -604,7 +620,7 @@ class Crawler(threading.Thread):
                 if self.paused:
                     self.paused = False
                     self.logger.success(f"{self.name} is resumed")
-                
+
                 if self.queue.empty():
                     time.sleep(5)
                     continue
@@ -615,7 +631,10 @@ class Crawler(threading.Thread):
 
                 if num_retry_per_url >= self.config.network.max_retry_per_url:
                     self.logger.debug(f"Failed to crawl {url} after {num_retry_per_url} attempts (maximum: {self.config.network.max_retry_per_url}). Giving up.")
-                    time.sleep(1)
+                    continue
+
+                if urlparse(url).netloc in self.down_domains_cache:
+                    logger.debug(f"{urlparse(url).netloc} is down. Giving up.")
                     continue
 
                 # Nettoyer l'URL
@@ -652,18 +671,31 @@ class Crawler(threading.Thread):
                 try:
                     crawl_result = self.crawl(url)
                 except CrawlError as e:
-                    if isinstance(e, NetworkError):
-                        if e.retryable:
-                            with self.domain_crawl_time_lock:
-                                self.queue.put((time.time(), 2, num_retry_per_url + 1, url))
-                        else:
-                            try:
-                                with self.db_transaction(autocommit=True) as session:
-                                    session.add(CrawledURL(url=list(self.insert_urls_in_db({url}, session).values())[0]))
-                            except DatabaseError:
-                                self.logger.exception(f"Error while adding {url} to crawled urls")
-                            else:
-                                self.crawled_urls_bf.add(url)
+                    if not isinstance(e, NetworkError):
+                        continue
+                        
+                    if e.retryable:
+                        if (domain := urlparse(url).netloc) not in self.domain_errors_count_cache:
+                            self.domain_errors_count_cache[domain] = 0
+                        self.domain_errors_count_cache[urlparse(url).netloc] += 1
+
+                        if self.domain_errors_count_cache[urlparse(url).netloc] >= self.config.network.max_retry_per_domain:
+                            if not self.tcp_ping(urlparse(url).netloc):
+                                self.down_domains_cache[urlparse(url).netloc] = 1
+                                continue
+                            del self.domain_errors_count_cache[urlparse(url).netloc]
+                        
+                        with self.domain_crawl_time_lock:
+                            self.queue.put((time.time(), 2, num_retry_per_url + 1, url))
+                        continue
+                        
+                    try:
+                        with self.db_transaction(autocommit=True) as session:
+                            session.add(CrawledURL(url=list(self.insert_urls_in_db({url}, session).values())[0]))
+                    except DatabaseError:
+                        self.logger.exception(f"Error while adding {url} to crawled urls")
+                    else:
+                        self.crawled_urls_bf.add(url)
                     continue
 
                 self.logger.debug(f"Crawled page {url} in {time.time() - start_time} seconds")
@@ -678,7 +710,7 @@ class Crawler(threading.Thread):
 
                 try:
                     with self.db_transaction(autocommit=True) as session:
-                        all_urls = {url} | crawl_result.links
+                        all_urls = {url} | set(filter(lambda link: urlparse(link).netloc not in self.down_domains_cache, crawl_result.links))
 
                         with profile_block("Insert all urls in db"):
                             url_objs_dict = self.insert_urls_in_db(all_urls, session)

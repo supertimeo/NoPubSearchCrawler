@@ -8,4 +8,5 @@ network:
   bot_name: "NoPubSearchBot"
   user_agent: "NoPubSearchBot/0.13.52 (Python Requests; contact: fort.timeo38@gmail.com)"
   max_retry_per_url: 3
+  max_retry_per_domain: 20
 num_crawlers: 15

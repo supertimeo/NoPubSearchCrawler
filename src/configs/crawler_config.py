@@ -11,6 +11,7 @@ class CrawlerNetworkConfig(BaseConfig):
     user_agent: str
     bot_name: str
     max_retry_per_url: int
+    max_retry_per_domain: int
 
     @model_validator(mode="after")
     def validate_default_waiting_delay(self) -> CrawlerNetworkConfig:
