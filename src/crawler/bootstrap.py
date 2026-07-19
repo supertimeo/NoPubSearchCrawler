@@ -134,10 +134,10 @@ def init_queue() -> PriorityQueue:
     logger.info("Initializing queue...")
     start_time = time.time()
 
-    queue = PriorityQueue[tuple[float, int, str]]()
+    queue = PriorityQueue[tuple[float, int, int, str]]()
     with open(assets_folder_path / "start_url_lists" / "start_urls.json", "r") as f:
         for seed in json.load(f)["crawler_seeds"]:
-            queue.put((0, seed["priority"], seed["url"]))
+            queue.put((0, seed["priority"], 0, seed["url"]))
 
     logger.success(f"Queue initialized successfully in {time.time() - start_time}")
 

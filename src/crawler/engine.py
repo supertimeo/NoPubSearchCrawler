@@ -131,7 +131,7 @@ class QueueRecharger(threading.Thread):
         last_activity: Horodatage de la dernière activité significative du thread, utile pour la supervision.
         logger: Logger enrichi avec le nom de la classe, utilisé pour tracer les opérations et erreurs du thread.
     """
-    def __init__(self, queue: PriorityQueue[tuple[float, int, str]], session_factory: scoped_session[ASession], stop_event: threading.Event, pause_event: threading.Event):
+    def __init__(self, queue: PriorityQueue[tuple[float, int, int, str]], session_factory: scoped_session[ASession], stop_event: threading.Event, pause_event: threading.Event):
         """Initialise le thread de recharge de la file d’attente du crawler. Configure les ressources nécessaires pour surveiller la file de priorité et interagir avec la base de données selon la configuration courante.
 
         Cette méthode prépare une instance de `QueueRecharger` en enregistrant la file de priorité, la fabrique de sessions, les événements de contrôle, ainsi que la configuration du crawler utilisée pour déterminer les paramètres de recharge. Elle définit également l’identifiant et le nom du thread, initialise les indicateurs d’état et crée un logger enrichi pour tracer le fonctionnement du recharger.
@@ -202,7 +202,7 @@ class QueueRecharger(threading.Thread):
             return
 
         for url in urls:
-            self.queue.put((url[1], url[3], url[0]))
+            self.queue.put((url[1], url[3], 0, url[0]))
         with self.session_factory() as session, self.logger.catch(level=LoggingLevels.ERROR, message=f"Failed to remove {len(ids)} recharged URL(s) from the waiting list. Rolling back transaction.", onerror=lambda _: session.rollback()):
             session.execute(delete(WaitingURL).where(WaitingURL.id.in_(ids)))
             session.commit()
@@ -240,7 +240,7 @@ class Crawler(threading.Thread):
         last_activity: Horodatage de la dernière activité significative du thread, utile pour la supervision.
 
     """
-    def __init__(self, queue: PriorityQueue[tuple[float, int, str]], session_factory: scoped_session[ASession],
+    def __init__(self, queue: PriorityQueue[tuple[float, int, int, str]], session_factory: scoped_session[ASession],
                  cache: Cache, stop_event: threading.Event, pause_event: threading.Event, crawler_id: int,
                  crawling_urls: ThreadLocalURLTracker[str], crawling_urls_lock: threading.Lock, domain_crawl_time: dict[str, float],
                  domain_crawl_time_lock: threading.Lock, crawled_urls_bf: Bloom, remove_params: list[str],
@@ -609,16 +609,21 @@ class Crawler(threading.Thread):
                     time.sleep(5)
                     continue
 
-                domain_crawled_at, priority, url = self.queue.get()
+                domain_crawled_at, priority, num_retry_per_url, url = self.queue.get()
                 self.last_activity = time.time()
                 self.logger.trace(f"Get {url} in the queue")
+
+                if num_retry_per_url >= self.config.network.max_retry_per_url:
+                    self.logger.debug(f"Failed to crawl {url} after {num_retry_per_url} attempts (maximum: {self.config.network.max_retry_per_url}). Giving up.")
+                    time.sleep(1)
+                    continue
 
                 # Nettoyer l'URL
                 url = self.get_pure_url(url)
 
                 delay = self.robots_txt_manager.get_crawl_delay(url)
                 if domain_crawled_at + delay > time.time():
-                    self.queue.put((domain_crawled_at, priority, url))
+                    self.queue.put((domain_crawled_at, priority, num_retry_per_url, url))
                     self.logger.trace(f"{urlparse(url).netloc} is not ready for crawling")
                     time.sleep(0.5)
                     continue
@@ -650,7 +655,7 @@ class Crawler(threading.Thread):
                     if isinstance(e, NetworkError):
                         if e.retryable:
                             with self.domain_crawl_time_lock:
-                                self.queue.put((time.time(), 2, url))
+                                self.queue.put((time.time(), 2, num_retry_per_url + 1, url))
                         else:
                             try:
                                 with self.db_transaction(autocommit=True) as session:
