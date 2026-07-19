@@ -444,6 +444,70 @@ class Crawler(threading.Thread):
 
         return {url.url: url for url in url_orm_obj}
 
+    def flush_batch(self, batch_data: dict[str, CrawlResult]):
+        if not batch_data:
+            return
+
+        try:
+            with self.db_transaction(autocommit=True) as session:
+                all_links_set = { # sourcery skip
+                    link for cr in batch_data.values() for link in cr.links
+                }
+                all_urls = set(batch_data.keys()) | set(
+                    filter(
+                        lambda link: (
+                            self.url_manager.urlparse_(link).netloc
+                            not in self.down_domains_cache
+                        ),
+                        all_links_set,
+                    )
+                )
+
+                with profile_block("Insert all urls in db"):
+                    url_objs_dict = self.insert_urls_in_db(all_urls, session)
+
+                # Objets CrawledURL
+                crawled_urls_to_add = [
+                    CrawledURL(url=url_objs_dict[u]) for u in batch_data.keys()
+                ]
+                session.add_all(crawled_urls_to_add)
+
+                # Objets Page
+                pages_to_add = []
+                for page_url, cr in batch_data.items():
+                    page_orm_obj = url_objs_dict[page_url]
+                    page_specific_links = [
+                        Link(url=url_objs_dict[link])
+                        for link in cr.links
+                        if link in url_objs_dict
+                    ]
+                    pages_to_add.append(
+                        Page(
+                            url=page_orm_obj,
+                            title=cr.title,
+                            content=cr.content,
+                            links=page_specific_links,
+                        )
+                    )
+                session.add_all(pages_to_add)
+
+                # Liste d'attente
+                out_links_orm = [
+                    url_objs_dict[link]
+                    for link in all_links_set
+                    if link in url_objs_dict
+                ]
+                self.insert_urls_in_waiting_list(session, out_links_orm)
+
+        except DatabaseError:
+            self.logger.exception("Error while adding a batch to database")
+        else:
+            for processed_url in batch_data.keys():
+                self.crawled_urls_bf.add(processed_url)
+            self.pages_crawled += len(batch_data)
+        finally:
+            batch_data.clear()
+
     def run(self):    # sourcery skip: low-code-quality
         """Exécute la boucle principale du thread de crawler. Coordonne la récupération des URLs, leur filtrage, le respect des délais de crawl et l’enregistrement des résultats en base de données.
 
@@ -454,11 +518,12 @@ class Crawler(threading.Thread):
             self.logger.info(f"Crawler {self.name} started")
             time.sleep(5) # Attente de 5 secondes pour permettre le démarrage des threads
 
+            batch_data: dict[str, CrawlResult] = {}
+
             while not self.stop_event.is_set():
                 # Récupération d'une page à crawler
                 if self.pause_event.is_set():
                     if not self.paused:
-                        # noinspection PyUnusedLocal
                         self.paused = True
                         self.logger.success(f"{self.name} is paused")
                     time.sleep(1)
@@ -469,7 +534,8 @@ class Crawler(threading.Thread):
                     self.logger.success(f"{self.name} is resumed")
 
                 if self.queue.empty():
-                    time.sleep(5)
+                    time.sleep(0.5)
+                    self.flush_batch(batch_data)
                     continue
 
                 domain_crawled_at, priority, num_retry_per_url, url = self.queue.get()
@@ -523,7 +589,7 @@ class Crawler(threading.Thread):
                 except CrawlError as e:
                     if not isinstance(e, NetworkError):
                         continue
-                        
+
                     if e.retryable:
                         if domain not in self.domain_errors_count_cache:
                             self.domain_errors_count_cache[domain] = 0
@@ -534,11 +600,11 @@ class Crawler(threading.Thread):
                                 self.down_domains_cache[domain] = 1
                                 continue
                             del self.domain_errors_count_cache[domain]
-                        
+
                         with self.domain_crawl_time_lock:
                             self.queue.put((time.time(), 2, num_retry_per_url + 1, url))
                         continue
-                        
+
                     try:
                         with self.db_transaction(autocommit=True) as session:
                             session.add(CrawledURL(url=list(self.insert_urls_in_db({url}, session).values())[0]))
@@ -558,28 +624,13 @@ class Crawler(threading.Thread):
                     self.logger.warning(f"Invalid page {url}")
                     continue
 
-                try:
-                    with self.db_transaction(autocommit=True) as session:
-                        all_urls = {url} | set(filter(lambda link: domain not in self.down_domains_cache, crawl_result.links))
+                batch_data[url] = crawl_result
 
-                        with profile_block("Insert all urls in db"):
-                            url_objs_dict = self.insert_urls_in_db(all_urls, session)
+                # On attend d'avoir 50 éléments pour insérer
+                if len(batch_data) < 50 and not self.queue.empty():
+                    continue
 
-                        url_orm_obj = url_objs_dict[url]
+                self.flush_batch(batch_data)
 
-                        # On récupère les objets des enfants (en filtrant les éventuels absents)
-                        del url_objs_dict[url]
-                        link_orm_objs = list(url_objs_dict.values())
-
-                        link_orm_objs.sort(key=lambda u: u.id)
-
-                        session.add(CrawledURL(url=url_orm_obj))
-                        links = [Link(url=link) for link in link_orm_objs]
-                        session.add(Page(url=url_orm_obj, title=crawl_result.title, content=crawl_result.content, links=links))
-                        self.insert_urls_in_waiting_list(session, link_orm_objs)
-                except DatabaseError:
-                    self.logger.exception(f"Error while adding {url} to database")
-                else:
-                    self.crawled_urls_bf.add(url)
-                    self.pages_crawled += 1
+            self.logger.success(f"{self.name} finished successfully")
             self.logger.success(f"{self.name} finished successfully")
