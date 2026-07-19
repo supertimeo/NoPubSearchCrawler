@@ -1119,15 +1119,18 @@ class ConfigsPage(Container):
 
             scalar_type = cast(ConfigsTypes, value_type)
             with Horizontal(classes=f"config-row indent-{indent_level}"):
-                # TODO: trouver et régler la caude de l'extrême décalage des champs de liste
-                yield Label(display_key, classes="config-label")
+                label_classes = (
+                    "config-label config-list-marker"
+                    if display_key == "-"
+                    else "config-label"
+                )
+                yield Label(display_key, classes=label_classes)
                 yield ConfigInput(
                     config_type=scalar_type,
                     config_path=path,
                     value=str(value),
                     restrict=self.get_restriction(scalar_type),
                 )
-
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Valide et enregistre une valeur de configuration lorsque l'utilisateur soumet un champ.
         Cette méthode vérifie le format selon les restrictions, convertit la chaîne dans le type attendu, met à jour le modèle et persiste la configuration sur disque.

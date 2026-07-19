@@ -353,3 +353,8 @@ LogsPage {
     background: $accent;
     tint: transparent;
 }
+
+.config-list-marker {
+    width: auto;
+    min-width: 3;
+}
