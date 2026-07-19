@@ -74,7 +74,7 @@ def init_logger(args: argparse.Namespace, textual_app: CrawlerTerminalApp):
     logger.add(log_folder_path / "error" / "error.log", rotation="200 MB", retention="7 days", enqueue=True, compression="zip", level=LoggingLevels.ERROR,
                format=log_format, backtrace=True, diagnose=True)
     logger.add(log_folder_path / "trace" / "trace.log", rotation="10 GB", retention="7 days", enqueue=True, compression="zip", level=LoggingLevels.TRACE,
-               format=log_format, backtrace=True, diagnose=True)
+               format=log_format)
     logger.add(
         # C'est ICI qu'on définit ce qui sera affiché par défaut dans l'interface (grâce à ton StrEnum)
         TextualSink(textual_app, default_ui_level=LoggingLevels.INFO),
@@ -83,8 +83,6 @@ def init_logger(args: argparse.Namespace, textual_app: CrawlerTerminalApp):
         # pour qu'ils soient gardés en mémoire.
         level=LoggingLevels.TRACE,
         format=log_format,
-        backtrace=True,
-        diagnose=True,
         # colorize=False : le widget Log de Textual ne comprend pas les
         # séquences ANSI, il les affiche comme du texte brut (d'où le "[0m"
         # visible). Pire, l'octet ESC embarqué dans le message est transmis

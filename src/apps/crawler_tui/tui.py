@@ -18,7 +18,6 @@ from typing import (
     Callable,
 )
 
-import yappi
 from diskcache import Cache
 from dotenv import find_dotenv, dotenv_values, set_key
 from pydantic import BaseModel
@@ -1527,10 +1526,6 @@ class CrawlerTerminalApp(App):
             self.observer.join()
         
         await asyncio.to_thread(join_threads)
-
-        yappi.stop()
-        # Enregistre au format pstat
-        yappi.get_func_stats().save("crawler_profile.prof", type="pstat")
         
         await super().action_quit()
 

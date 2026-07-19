@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from queue import PriorityQueue
 from typing import cast, TYPE_CHECKING, Optional, overload, Literal
 
-import yappi
 from diskcache import Cache
 from loguru import logger
 from rbloom import Bloom
@@ -241,8 +240,6 @@ def launch_crawler(args: Namespace, stop_events: list[threading.Event], pause_ev
     Returns:
         Un tuple contenant la liste des crawlers avec leurs événements, le `QueueRecharger` avec ses événements, l’observateur de configuration et le bloom filter des URLs crawlées si `return_crawlers` est vrai ; `None` sinon, après la fin de tous les threads.
     """
-    yappi.set_clock_type("wall")
-    yappi.start()
 
     # création des threads
     crawlers = []

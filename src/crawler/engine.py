@@ -612,14 +612,8 @@ class Crawler(threading.Thread):
                 self.last_activity = time.time()
                 self.logger.trace(f"Get {url} in the queue")
 
-                # TODO: penser a enlever ces 2 lignes lorsque je pourrais a nouveau crawlés le site archive.org (je timeout a chaque fois alors que depuis un autre pc je timeout pas, donc je suppose qu'ils mon bloqué)
-                if urlparse(url).netloc == "archive.org":
-                    time.sleep(0.5)
-                    continue
-
                 # Nettoyer l'URL
                 url = self.get_pure_url(url)
-
 
                 delay = self.robots_txt_manager.get_crawl_delay(url)
                 if domain_crawled_at + delay > time.time():
@@ -691,14 +685,10 @@ class Crawler(threading.Thread):
 
                         link_orm_objs.sort(key=lambda u: u.id)
 
-                        with profile_block("Insert page in crawled urls"):
-                            session.add(CrawledURL(url=url_orm_obj))
-                        with profile_block("Insert all links in db"):
-                            links = [Link(url=link) for link in link_orm_objs]
-                        with profile_block("Insert page in db"):
-                            session.add(Page(url=url_orm_obj, title=crawl_result.title, content=crawl_result.content, links=links))
-                        with profile_block("Insert all links in waiting urls"):
-                            self.insert_urls_in_waiting_list(session, link_orm_objs)
+                        session.add(CrawledURL(url=url_orm_obj))
+                        links = [Link(url=link) for link in link_orm_objs]
+                        session.add(Page(url=url_orm_obj, title=crawl_result.title, content=crawl_result.content, links=links))
+                        self.insert_urls_in_waiting_list(session, link_orm_objs)
                 except DatabaseError:
                     self.logger.exception(f"Error while adding {url} to database")
                 else:
