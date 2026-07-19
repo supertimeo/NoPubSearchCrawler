@@ -20,10 +20,10 @@ from protego import Protego
 from requests.adapters import HTTPAdapter
 from selectolax.parser import HTMLParser
 from urllib3 import Retry
+from usp.tree import sitemap_from_str
 
 from src.configs.crawler_config import CrawlerConfig
-
-from .errors import CrawlError, NetworkError, NotCrawlableError
+from .errors import CrawlError, NetworkError
 
 
 class BaseManager:
@@ -270,6 +270,10 @@ class RobotsTxtManager(BaseManager):
         if parser is None:
             return True
         return parser.can_fetch(url, self.config.network.bot_name)
+
+    def get_sitemaps(self, url: str) -> list[str]:
+        parser = self.get_parser(url)
+        return [] if parser is None else list(parser.sitemaps)
     
     
 class URLManager(BaseManager):
@@ -365,6 +369,7 @@ class URLManager(BaseManager):
 class HTMLParsingManager(BaseManager):
     def __init__(self, url_manager: URLManager):
         self.url_manager = url_manager
+        self.robots_txt_manager = self.url_manager.robots_txt_manager
 
     @staticmethod
     def parse_html(html: str) -> HTMLParser:
@@ -385,6 +390,10 @@ class HTMLParsingManager(BaseManager):
                 if (full_url := urljoin(base_url, href))
                 if urlparse(full_url).scheme in ("http", "https")
                 if (pure_url := self.url_manager.get_pure_url(full_url))
+            } | {
+                link.url
+                for sitemap in self.robots_txt_manager.get_sitemaps(base_url)
+                for link in sitemap_from_str(sitemap).all_pages()
             }
         except ValueError as e:
             raise CrawlError(f"Invalid url: {base_url}") from e
