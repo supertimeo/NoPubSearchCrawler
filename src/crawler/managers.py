@@ -22,7 +22,7 @@ from selectolax.parser import HTMLParser
 from urllib3 import Retry
 
 from src.configs.crawler_config import CrawlerConfig
-from .errors import NetworkError
+from .errors import NetworkError, NotCrawlableError, CrawlError
 
 
 class BaseManager:
@@ -376,14 +376,17 @@ class HTMLParsingManager(BaseManager):
 
     def extract_links(self, base_url: str, tree: HTMLParser) -> set[str]:
         # TODO: Ajouter un parser pour le sitemap.xml
-        return {
-            pure_url
-            for link in tree.css("a")
-            if (href := link.attributes.get("href")) is not None
-            if (full_url := urljoin(base_url, href))
-            if urlparse(full_url).scheme in ("http", "https")
-            if (pure_url := self.url_manager.get_pure_url(full_url))
-        }
+        try:
+            return {
+                pure_url
+                for link in tree.css("a")
+                if (href := link.attributes.get("href")) is not None
+                if (full_url := urljoin(base_url, href))
+                if urlparse(full_url).scheme in ("http", "https")
+                if (pure_url := self.url_manager.get_pure_url(full_url))
+            }
+        except ValueError as e:
+            raise CrawlError(f"Invalid url: {base_url}") from e
     
     @staticmethod
     def extract_main_content(tree: HTMLParser) -> str:
