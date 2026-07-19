@@ -6,6 +6,10 @@ class RobotsError(CrawlError):
     pass
 
 
+class NotCrawlableError(CrawlError):
+    pass
+
+
 class NetworkError(CrawlError):
     def __init__(self, *args, retryable: bool = False):
         super().__init__(*args)

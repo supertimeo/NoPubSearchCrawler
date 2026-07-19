@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import re
 # import pour la gestion des threads
 import threading
 import time
@@ -9,7 +8,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from queue import PriorityQueue
 from typing import cast, Generator
-from urllib.parse import urlparse, urljoin, urlunparse, parse_qsl, urlencode
 
 # import pour le scraping et le crawling
 import urllib3
@@ -22,7 +20,6 @@ from psycopg.errors import StringDataRightTruncation
 from pydantic.v1.dataclasses import dataclass
 # imports pour le bloom filter
 from rbloom import Bloom
-from selectolax.parser import HTMLParser
 from sqlalchemy import select, exists, delete
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import DataError
@@ -35,7 +32,7 @@ from src.configs.crawler_config import CrawlerConfig
 from src.database.model import URL, WaitingURL, CrawledURL, Page, Link
 from .errors import NetworkError, CrawlError
 from .log_levels import LoggingLevels
-from .managers import NetworkManager, RobotsTxtManager
+from .managers import NetworkManager, RobotsTxtManager, HTMLParsingManager, URLManager
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -292,6 +289,8 @@ class Crawler(threading.Thread):
 
         self.network_manager = NetworkManager(self.config)
         self.robots_txt_manager = RobotsTxtManager(self.cache, self.network_manager, self.config)
+        self.url_manager = URLManager(self.config, self.robots_txt_manager)
+        self.html_parsing_manager = HTMLParsingManager(self.url_manager)
 
         self.paused = False
         self.pages_crawled = 0
@@ -335,54 +334,6 @@ class Crawler(threading.Thread):
                     "An error occurred while inserting a URL in database"
                 ) from e
 
-    def get_pure_url(self, url: str) -> str:
-        """Normalise une URL afin d’obtenir une version «pure» et stable pour le crawling. Nettoie le schéma, le domaine, le chemin et les paramètres de requête pour réduire les doublons et les variations non pertinentes.
-
-        Cette méthode met en minuscules le schéma et le domaine, supprime les ports par défaut, simplifie et nettoie le chemin, puis filtre et trie les paramètres de query en excluant ceux listés dans `remove_params`. Elle reconstruit finalement une nouvelle URL sans fragment à partir de ces éléments normalisés.
-
-        Args:
-            url: L’URL brute à normaliser avant son utilisation dans le processus de crawling.
-
-        Returns:
-            Une chaîne représentant l’URL normalisée, avec un schéma et un domaine nettoyés, un chemin simplifié et une query string filtrée et ordonnée.
-        """
-        # 1. Analyser l'URL
-        parsed = urlparse(url)
-
-        # 2. Normalisation du schéma et domaine (netloc)
-        scheme = parsed.scheme.lower()
-        netloc = parsed.netloc.lower()
-
-        # Suppression des ports par défaut inutiles (ex: example.com:80 -> example.com)
-        if scheme == "http" and netloc.endswith(":80"):
-            netloc = netloc[:-3]
-        elif scheme == "https" and netloc.endswith(":443"):
-            netloc = netloc[:-4]
-
-
-        # Remplacement des slashes multiples par un seul (ex: /wiki//test -> /wiki/test)
-        path = re.sub(r'//+', '/', parsed.path)
-
-        # Retrait du slash final si ce n'est pas la racine
-        if len(path) > 1 and path.endswith('/'):
-            path = path[:-1]
-
-        # 3. Traitement des paramètres (Query String)
-        query_params = parse_qsl(parsed.query, keep_blank_values=True)
-
-        # Filtrer et trier
-        filtered_params = [
-            (key, value) for key, value in query_params
-            if key.lower() not in self.remove_params
-        ]
-        filtered_params.sort()
-
-        # Reconstruction de la query string
-        new_query = urlencode(filtered_params)
-
-        # 4. Reconstruction de l'URL propre sans le fragment ('')
-        return urlunparse((scheme, netloc, path, parsed.params, new_query, ''))
-
     def url_is_crawled(self, url: str) -> bool:
         """Indique si une URL a déjà été traitée par le crawler. Combine une vérification rapide via bloom filter et une vérification persistante en base de données pour fiabiliser le résultat.
 
@@ -396,51 +347,6 @@ class Crawler(threading.Thread):
         """
         with self.db_transaction() as session:
             return url in self.crawled_urls_bf and cast(bool, session.scalar(select(exists(select(CrawledURL).join(CrawledURL.url).where(URL.url == url)))))
-
-    @staticmethod
-    def extract_main_content(tree: HTMLParser) -> str:
-        """Extrait le contenu textuel principal d’une page HTML parsée. Identifie les zones de contenu importantes et élimine les éléments de navigation ou décoratifs pour ne conserver que le texte utile.
-
-        Cette méthode recherche en priorité des conteneurs tels que `<main>` ou `<article>`, ou se rabat sur le `<body>` si aucun n’est trouvé, puis supprime les balises non pertinentes (navigation, pied de page, scripts, styles, etc.). Elle renvoie ensuite le texte nettoyé et concaténé du conteneur choisi afin de fournir un contenu lisible et exploitable pour l’indexation.
-
-        Args:
-            tree: Objet `HTMLParser` de selectolax représentant l’arbre HTML de la page à analyser.
-
-        Returns:
-            Une chaîne de caractères contenant le contenu principal nettoyé de la page, sans éléments de navigation ni scripts.
-        """
-        # Sélecteurs CSS pour les conteneurs de contenu potentiels, par ordre de priorité
-        main_content_selectors = ["main", "article", ".main-content", ".post", "#content", "#main"]
-
-        main_element = None
-        for selector in main_content_selectors:
-            main_element = tree.css_first(selector)
-            if main_element is not None:
-                break
-
-        # Si aucun conteneur principal n'est trouvé, utiliser le body comme base
-        if main_element is None:
-            main_element = tree.body
-        if main_element is None:
-            return "" # Retourner une chaîne vide si même le body est absent
-
-        # Cloner l'élément pour ne pas modifier l'arbre original si ce n'est pas souhaité
-        # C'est une bonne pratique, bien que selectolax ne fournisse pas de méthode de clonage directe.
-        # Les opérations de suppression modifieront le `main_element`.
-
-        # Sélecteurs des éléments à supprimer
-        tags_to_remove = ["nav", "footer", "header", "aside", "script", "style", ".noprint"]
-
-        for tag_selector in tags_to_remove:
-            # Trouver tous les éléments correspondants dans le conteneur principal
-            elements_to_remove = main_element.css(tag_selector)
-            for element in elements_to_remove:
-                element.decompose() # Supprime l'élément de l'arbre [1]
-
-        # Extraire le texte de l'élément nettoyé
-        # strip=True aide à enlever les espaces superflus en début et fin de chaque morceau de texte
-        # separator=' ' ajoute un espace entre les blocs de texte pour une meilleure lisibilité
-        return main_element.text(strip=True, separator=' ').replace('\x00', '')
 
     def insert_urls_in_waiting_list(self, session: ASession, urls: list[URL]) -> None:
         """Ajoute une liste d’URLs dans la table des URLs en attente de crawl. Prépare pour chaque URL un enregistrement contenant son identifiant et l’instant approximatif de dernier crawl de domaine afin de respecter les délais.
@@ -460,44 +366,11 @@ class Crawler(threading.Thread):
         session.execute(insert(WaitingURL).values([
             {
                 "url_id": url.id,
-                "domain_crawled_at": domain_crawl_time.get(urlparse(url.url).netloc, time.time()),
+                "domain_crawled_at": domain_crawl_time.get(self.url_manager.urlparse_(url.url).netloc, time.time()),
                 "priority": 1,
             }
             for url in urls
         ]).on_conflict_do_nothing(index_elements=["url_id"]))
-
-    def is_crawlable(self, url: str) -> bool:
-        """Détermine si une URL peut être crawlée par le crawler. Vérifie successivement la validité de son schéma et de son domaine, sa résolubilité réseau et les permissions définies dans le robots.txt.
-
-        Cette méthode pré-analyse l’URL, s’assure qu’elle utilise un schéma supporté et qu’elle possède un netloc, puis interroge le `NetworkManager` pour confirmer que le domaine est résolvable. Elle consulte enfin le `RobotsTxtManager` pour savoir si le crawling est autorisé sur cette URL, et renvoie un booléen indiquant si l’URL doit être acceptée ou rejetée.
-
-        Args:
-            url: L’URL à évaluer pour déterminer si elle est admissible au processus de crawling.
-
-        Returns:
-            True si l’URL respecte les contraintes de schéma, de résolubilité et de robots.txt, False sinon.
-        """
-        # Préparser l'URL
-        parsed_url = urlparse(url)
-
-        # Précalculer le netloc et le robots.txt
-        netloc = parsed_url.netloc
-
-        # Vérification si l'URL est crawlable
-        if (
-            parsed_url.scheme not in ["http", "https"]
-            and netloc is None
-            or netloc == ""
-        ):
-            self.logger.debug(f"URL {url} is not crawlable because it doesn't start with http or https or it doesn't have a netloc")
-            return False
-
-        # Vérification de la permission de crawler la page avec le robots.txt
-        if not self.robots_txt_manager.is_allowed(url):
-            self.logger.debug(f"The NoPubSearch crawler is not allowed to crawl {url}")
-            return False
-
-        return True
 
     def crawl(self, url: str) -> CrawlResult:
         """Crawle une URL et extrait les informations principales de la page. Retourne le titre, le contenu textuel principal et l’ensemble des liens pertinents découverts.
@@ -528,26 +401,11 @@ class Crawler(threading.Thread):
             self.logger.debug(f"URL {url} is not text/html page")
             raise CrawlError(f"URL {url} is not text/html page")
 
-        # Analyse du contenu de la page selectolax beaucoup plus rapide que BeautifulSoup
-        tree = HTMLParser(response.text)
-
-        # Récupération du titre et du contenu de la page
-        title = tree.css_first("title").text() if tree.css_first("title") is not None else "Sans titre" # type: ignore
-        title = title.replace('\x00', '')[:512]
-
-        # Récupération des liens de la page
-        links = {
-            pure_url
-            for link in tree.css("a")
-            if (href := link.attributes.get("href")) is not None
-            if (full_url := urljoin(url, href))
-            if urlparse(full_url).scheme in ("http", "https")
-            if (pure_url := self.get_pure_url(full_url))
-        }
-
-        # TODO: Ajouter un parser pour le sitemap.xml
-
-        content = self.extract_main_content(tree)
+        tree = self.html_parsing_manager.parse_html(response.text)
+        
+        title = self.html_parsing_manager.extract_title(tree)
+        links = self.html_parsing_manager.extract_links(url, tree)
+        content = self.html_parsing_manager.extract_main_content(tree)
 
         # Retourne le titre, le contenu et les liens de la page
         self.logger.info(f"Crawled page : {url}")
@@ -622,21 +480,21 @@ class Crawler(threading.Thread):
                     self.logger.debug(f"Failed to crawl {url} after {num_retry_per_url} attempts (maximum: {self.config.network.max_retry_per_url}). Giving up.")
                     continue
 
-                if urlparse(url).netloc in self.down_domains_cache:
-                    logger.debug(f"{urlparse(url).netloc} is down. Giving up.")
+                if self.url_manager.urlparse_(url).netloc in self.down_domains_cache:
+                    logger.debug(f"{self.url_manager.urlparse_(url).netloc} is down. Giving up.")
                     continue
 
                 # Nettoyer l'URL
-                url = self.get_pure_url(url)
+                url = self.url_manager.get_pure_url(url)
 
                 delay = self.robots_txt_manager.get_crawl_delay(url)
                 if domain_crawled_at + delay > time.time():
                     self.queue.put((domain_crawled_at, priority, num_retry_per_url, url))
-                    self.logger.trace(f"{urlparse(url).netloc} is not ready for crawling")
+                    self.logger.trace(f"{self.url_manager.urlparse_(url).netloc} is not ready for crawling")
                     time.sleep(0.5)
                     continue
 
-                if not self.is_crawlable(url):
+                if not self.url_manager.url_is_crawlable(url):
                     time.sleep(0.5)
                     continue
 
@@ -664,15 +522,15 @@ class Crawler(threading.Thread):
                         continue
                         
                     if e.retryable:
-                        if (domain := urlparse(url).netloc) not in self.domain_errors_count_cache:
+                        if (domain := self.url_manager.urlparse_(url).netloc) not in self.domain_errors_count_cache:
                             self.domain_errors_count_cache[domain] = 0
-                        self.domain_errors_count_cache[urlparse(url).netloc] += 1
+                        self.domain_errors_count_cache[self.url_manager.urlparse_(url).netloc] += 1
 
-                        if self.domain_errors_count_cache[urlparse(url).netloc] >= self.config.network.max_retry_per_domain:
-                            if not self.network_manager.tcp_ping(urlparse(url).netloc):
-                                self.down_domains_cache[urlparse(url).netloc] = 1
+                        if self.domain_errors_count_cache[self.url_manager.urlparse_(url).netloc] >= self.config.network.max_retry_per_domain:
+                            if not self.network_manager.tcp_ping(self.url_manager.urlparse_(url).netloc):
+                                self.down_domains_cache[self.url_manager.urlparse_(url).netloc] = 1
                                 continue
-                            del self.domain_errors_count_cache[urlparse(url).netloc]
+                            del self.domain_errors_count_cache[self.url_manager.urlparse_(url).netloc]
                         
                         with self.domain_crawl_time_lock:
                             self.queue.put((time.time(), 2, num_retry_per_url + 1, url))
@@ -690,7 +548,7 @@ class Crawler(threading.Thread):
                 self.logger.debug(f"Crawled page {url} in {time.time() - start_time} seconds")
 
                 with self.domain_crawl_time_lock:
-                    self.domain_crawl_time[urlparse(url).netloc] = time.time() + delay
+                    self.domain_crawl_time[self.url_manager.urlparse_(url).netloc] = time.time() + delay
 
                 # Vérification si le titre, le contenu et les liens sont valides
                 if not crawl_result.title and not crawl_result.content and not crawl_result.links:
@@ -699,7 +557,7 @@ class Crawler(threading.Thread):
 
                 try:
                     with self.db_transaction(autocommit=True) as session:
-                        all_urls = {url} | set(filter(lambda link: urlparse(link).netloc not in self.down_domains_cache, crawl_result.links))
+                        all_urls = {url} | set(filter(lambda link: self.url_manager.urlparse_(link).netloc not in self.down_domains_cache, crawl_result.links))
 
                         with profile_block("Insert all urls in db"):
                             url_objs_dict = self.insert_urls_in_db(all_urls, session)

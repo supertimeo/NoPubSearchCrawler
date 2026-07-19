@@ -11,4 +11,16 @@ network:
   max_retry_per_url: 3
   max_retry_per_domain: 20
   retry_backoff_factor: 1
+url:
+  remove_params:
+    - "utm_source"
+    - "utm_medium"
+    - "utm_campaign"
+    - "utm_term"
+    - "utm_content"
+    - "gclid"
+    - "ref"
+    - "source"
+    - "yclid"
+    - "_ga"
 num_crawlers: 15

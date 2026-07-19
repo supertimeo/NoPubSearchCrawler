@@ -1,8 +1,16 @@
+import re
 import socket
 import time
 from functools import lru_cache
 from typing import Optional
-from urllib.parse import ParseResult, urlparse
+from urllib.parse import (
+    ParseResult,
+    urlparse,
+    urljoin,
+    urlencode,
+    urlunparse,
+    parse_qsl,
+)
 
 import requests
 import urllib3
@@ -10,13 +18,14 @@ from diskcache import Cache
 from loguru import logger
 from protego import Protego
 from requests.adapters import HTTPAdapter
+from selectolax.parser import HTMLParser
 from urllib3 import Retry
 
 from src.configs.crawler_config import CrawlerConfig
 from .errors import NetworkError
 
 
-class BaseDomainManager:
+class BaseManager:
     """Fournit une base commune pour les gestionnaires de domaine utilisés par le crawler. Définit une interface minimale permettant de spécialiser le comportement réseau ou robots.txt sans imposer de logique concrète.
 
     Cette classe ne contient pas de fonctionnalités en elle-même mais sert de point d’extension pour des implémentations comme `NetworkManager` ou `RobotsTxtManager`. Elle permet de typer et organiser les gestionnaires liés aux domaines au sein du code de crawling.
@@ -25,7 +34,7 @@ class BaseDomainManager:
     pass
 
 
-class NetworkManager(BaseDomainManager):
+class NetworkManager(BaseManager):
     """Gère les opérations réseau nécessaires au crawling des pages web. Centralise les requêtes HTTP et la résolution DNS tout en appliquant les paramètres configurés du crawler.
 
     Cette classe fournit une méthode de téléchargement de page qui interprète finement les erreurs réseau et HTTP en les transformant en `NetworkError` indiquant si une nouvelle tentative est pertinente. Elle expose également une méthode de vérification de résolubilité de domaine, mise en cache, afin de limiter les appels DNS coûteux.
@@ -98,6 +107,9 @@ class NetworkManager(BaseDomainManager):
 
         except urllib3.exceptions.MaxRetryError as e:
             raise NetworkError(f"Max retry while fetching {url}", retryable=True) from e
+        
+        except requests.exceptions.RetryError as e:
+            raise NetworkError(f"Retry failed while fetching {url}", retryable=True) from e
 
         except requests.exceptions.SSLError as e:
             raise NetworkError(f"SSL error while fetching {url}") from e
@@ -141,7 +153,7 @@ class NetworkManager(BaseDomainManager):
         return response
 
 
-class RobotsTxtManager(BaseDomainManager):
+class RobotsTxtManager(BaseManager):
     """Gère la récupération et l’interprétation des fichiers robots.txt pour le crawler. Centralise le téléchargement, la mise en cache et l’analyse des règles d’accès et des délais de crawl par domaine.
 
     Cette classe utilise un cache persistant pour éviter de re-télécharger les robots.txt, crée et mémorise des parseurs Protego par domaine, puis expose des méthodes pour obtenir le délai de crawl et vérifier si une URL est autorisée. Elle assure ainsi le respect des politiques définies par les sites web tout en optimisant les requêtes réseau.
@@ -257,3 +269,178 @@ class RobotsTxtManager(BaseDomainManager):
         if parser is None:
             return True
         return parser.can_fetch(url, self.config.network.bot_name)
+    
+    
+class URLManager(BaseManager):
+    def __init__(self, config: CrawlerConfig, robots_txt_manager: RobotsTxtManager):
+        self.config = config
+        
+        self.robots_txt_manager = robots_txt_manager
+
+    @staticmethod
+    def urlparse_(url):
+        return urlparse(url)
+
+    def get_pure_url(self, url: str) -> str:
+        """Normalise une URL afin d’obtenir une version «pure» et stable pour le crawling. Nettoie le schéma, le domaine, le chemin et les paramètres de requête pour réduire les doublons et les variations non pertinentes.
+
+        Cette méthode met en minuscules le schéma et le domaine, supprime les ports par défaut, simplifie et nettoie le chemin, puis filtre et trie les paramètres de query en excluant ceux listés dans `remove_params`. Elle reconstruit finalement une nouvelle URL sans fragment à partir de ces éléments normalisés.
+
+        Args:
+            url: L’URL brute à normaliser avant son utilisation dans le processus de crawling.
+
+        Returns:
+            Une chaîne représentant l’URL normalisée, avec un schéma et un domaine nettoyés, un chemin simplifié et une query string filtrée et ordonnée.
+        """
+        # 1. Analyser l'URL
+        parsed = self.urlparse_(url)
+
+        # 2. Normalisation du schéma et domaine (netloc)
+        scheme = parsed.scheme.lower()
+        netloc = parsed.netloc.lower()
+
+        # Suppression des ports par défaut inutiles (ex: example.com:80 -> example.com)
+        if scheme == "http" and netloc.endswith(":80"):
+            netloc = netloc[:-3]
+        elif scheme == "https" and netloc.endswith(":443"):
+            netloc = netloc[:-4]
+
+
+        # Remplacement des slashes multiples par un seul (ex: /wiki//test -> /wiki/test)
+        path = re.sub(r'//+', '/', parsed.path)
+
+        # Retrait du slash final si ce n'est pas la racine
+        if len(path) > 1 and path.endswith('/'):
+            path = path[:-1]
+
+        # 3. Traitement des paramètres (Query String)
+        query_params = parse_qsl(parsed.query, keep_blank_values=True)
+
+        # Filtrer et trier
+        filtered_params = [
+            (key, value) for key, value in query_params
+            if key.lower() not in self.config.url.remove_params
+        ]
+        filtered_params.sort()
+
+        # Reconstruction de la query string
+        new_query = urlencode(filtered_params)
+
+        # 4. Reconstruction de l'URL propre sans le fragment ('')
+        return urlunparse((scheme, netloc, path, parsed.params, new_query, ''))
+
+    def url_is_crawlable(self, url: str) -> bool:
+        """Détermine si une URL peut être crawlée par le crawler. Vérifie successivement la validité de son schéma et de son domaine, sa résolubilité réseau et les permissions définies dans le robots.txt.
+
+        Cette méthode pré-analyse l’URL, s’assure qu’elle utilise un schéma supporté et qu’elle possède un netloc, puis interroge le `NetworkManager` pour confirmer que le domaine est résolvable. Elle consulte enfin le `RobotsTxtManager` pour savoir si le crawling est autorisé sur cette URL, et renvoie un booléen indiquant si l’URL doit être acceptée ou rejetée.
+
+        Args:
+            url: L’URL à évaluer pour déterminer si elle est admissible au processus de crawling.
+
+        Returns:
+            True si l’URL respecte les contraintes de schéma, de résolubilité et de robots.txt, False sinon.
+
+        Raises:
+            NotCrawlableError: Si l'url n'est pas crawlable, on raise une erreur pour laisser le choix a son utilisateur la façon dont gérer cela.
+        """
+        # Préparser l'URL
+        parsed_url = self.urlparse_(url)
+
+        # Précalculer le netloc et le robots.txt
+        netloc = parsed_url.netloc
+
+        # Vérification si l'URL est crawlable
+        if (
+            parsed_url.scheme not in ["http", "https"]
+            and netloc is None
+            or netloc == ""
+        ):
+            return False
+
+        # Vérification de la permission de crawler la page avec le robots.txt
+        return self.robots_txt_manager.is_allowed(url)
+
+    
+class HTMLParsingManager(BaseManager):
+    def __init__(self, url_manager: URLManager):
+        self.url_manager = url_manager
+
+    @staticmethod
+    def parse_html(html: str) -> HTMLParser:
+        return HTMLParser(html)
+    
+    @staticmethod
+    def extract_title(tree: HTMLParser) -> str:
+        title = tree.css_first("title").text() if tree.css_first("title") else "Sans titre" # type: ignore
+        return title.replace('\x00', '')[:512]
+
+    def extract_links(self, base_url: str, tree: HTMLParser) -> set[str]:
+        # TODO: Ajouter un parser pour le sitemap.xml
+        return {
+            pure_url
+            for link in tree.css("a")
+            if (href := link.attributes.get("href")) is not None
+            if (full_url := urljoin(base_url, href))
+            if urlparse(full_url).scheme in ("http", "https")
+            if (pure_url := self.url_manager.get_pure_url(full_url))
+        }
+    
+    @staticmethod
+    def extract_main_content(tree: HTMLParser) -> str:
+        """Extrait le contenu textuel principal d’une page HTML parsée. Identifie les zones de contenu importantes et élimine les éléments de navigation ou décoratifs pour ne conserver que le texte utile.
+
+        Cette méthode recherche en priorité des conteneurs tels que `<main>` ou `<article>`, ou se rabat sur le `<body>` si aucun n’est trouvé, puis supprime les balises non pertinentes (navigation, pied de page, scripts, styles, etc.). Elle renvoie ensuite le texte nettoyé et concaténé du conteneur choisi afin de fournir un contenu lisible et exploitable pour l’indexation.
+
+        Args:
+            tree: Objet `HTMLParser` de selectolax représentant l’arbre HTML de la page à analyser.
+
+        Returns:
+            Une chaîne de caractères contenant le contenu principal nettoyé de la page, sans éléments de navigation ni scripts.
+        """
+        # Sélecteurs CSS pour les conteneurs de contenu potentiels, par ordre de priorité
+        main_content_selectors = [
+            "main",
+            "article",
+            ".main-content",
+            ".post",
+            "#content",
+            "#main",
+        ]
+
+        main_element = None
+        for selector in main_content_selectors:
+            main_element = tree.css_first(selector)
+            if main_element is not None:
+                break
+
+        # Si aucun conteneur principal n'est trouvé, utiliser le body comme base
+        if main_element is None:
+            main_element = tree.body
+        if main_element is None:
+            return ""  # Retourner une chaîne vide si même le body est absent
+
+        # Cloner l'élément pour ne pas modifier l'arbre original si ce n'est pas souhaité
+        # C'est une bonne pratique, bien que selectolax ne fournisse pas de méthode de clonage directe.
+        # Les opérations de suppression modifieront le `main_element`.
+
+        # Sélecteurs des éléments à supprimer
+        tags_to_remove = [
+            "nav",
+            "footer",
+            "header",
+            "aside",
+            "script",
+            "style",
+            ".noprint",
+        ]
+
+        for tag_selector in tags_to_remove:
+            # Trouver tous les éléments correspondants dans le conteneur principal
+            elements_to_remove = main_element.css(tag_selector)
+            for element in elements_to_remove:
+                element.decompose()  # Supprime l'élément de l'arbre [1]
+
+        # Extraire le texte de l'élément nettoyé
+        # strip=True aide à enlever les espaces superflus en début et fin de chaque morceau de texte
+        # separator=' ' ajoute un espace entre les blocs de texte pour une meilleure lisibilité
+        return main_element.text(strip=True, separator=" ").replace("\x00", "")

@@ -1,7 +1,8 @@
-from pydantic import model_validator
+from pydantic import model_validator, Field
 
 from src.common.base_config import BaseConfig
 from src.common.errors import ConfigurationError
+
 
 class CrawlerNetworkConfig(BaseConfig):
     timeout: float
@@ -22,6 +23,10 @@ class CrawlerNetworkConfig(BaseConfig):
                 "default_waiting_delay must be less than max_waiting_delay"
             )
         return self
+    
+    
+class CrawlerURLConfig(BaseConfig):
+    remove_params: list[str] = Field(min_length=1)
 
 
 class CrawlerConfig(BaseConfig):
@@ -30,6 +35,7 @@ class CrawlerConfig(BaseConfig):
     max_queue_size: int
     
     network: CrawlerNetworkConfig
+    url: CrawlerURLConfig
         
     @model_validator(mode="after")
     def validate_min_queue_size(self) -> CrawlerConfig:

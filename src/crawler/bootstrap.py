@@ -73,7 +73,7 @@ class CrawlerDependencies:
     cache: Cache
     crawled_urls_bf: Bloom
     crawled_urls_bf_lock: threading.Lock
-    queue: PriorityQueue[tuple[float, str]]
+    queue: PriorityQueue[tuple[float, int, int, str]]
 
 def init_db(args: Namespace) -> tuple[Engine, scoped_session[ASession]]:
     """Initialise la base de données et prépare la fabrique de sessions pour le crawler. Crée le moteur SQLAlchemy, applique le schéma et gère éventuellement la suppression de la base existante selon les arguments fournis.

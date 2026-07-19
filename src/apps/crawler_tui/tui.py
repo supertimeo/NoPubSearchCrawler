@@ -1119,6 +1119,7 @@ class ConfigsPage(Container):
 
             scalar_type = cast(ConfigsTypes, value_type)
             with Horizontal(classes=f"config-row indent-{indent_level}"):
+                # TODO: trouver et régler la caude de l'extrême décalage des champs de liste
                 yield Label(display_key, classes="config-label")
                 yield ConfigInput(
                     config_type=scalar_type,
