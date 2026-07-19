@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from queue import PriorityQueue
 from typing import TYPE_CHECKING, Literal, Optional, cast, overload
 
+import sentry_sdk
 from diskcache import Cache
 from loguru import logger
 from rbloom import Bloom
@@ -53,7 +54,7 @@ def validate_environment() -> None:
     Raises:
         ExceptionGroup: Si une ou plusieurs variables d'environnement manquent ou si la valeur de `DB_PORT` n'est pas un numéro de port valide.
     """
-    required_variables = ["DB_USERNAME", "DB_PASSWORD", "DB_NAME", "DB_HOST", "DB_PORT"]
+    required_variables = ["DB_USERNAME", "DB_PASSWORD", "DB_NAME", "DB_HOST", "DB_PORT", "SENTRY_DSN"]
 
     errors: list[ConfigurationError] = [
         MissingEnvironmentVariableError(f"Missing required environment variable: {variable}")
@@ -191,6 +192,15 @@ def init_config(crawlers: list[Crawler], queue_recharger: QueueRecharger) -> Bas
 
     observer.start()
     return observer
+
+def init_sentry():
+    sentry_sdk.init(
+        dsn=os.getenv("SENTRY_DSN"),
+        # Envoie 100% des erreurs
+        traces_sample_rate=1.0,
+        # Ajoute des informations utiles
+        send_default_pii=False,
+    )
 
 def build_dependencies(args: Namespace, cache: Cache | None = None) -> CrawlerDependencies:
     """Construit et assemble les dépendances nécessaires au démarrage du crawler. Orchestre l’initialisation de la base de données, du bloom filter, de la file de priorité et du cache pour fournir un ensemble cohérent de ressources.

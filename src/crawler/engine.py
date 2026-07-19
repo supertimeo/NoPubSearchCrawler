@@ -10,6 +10,7 @@ from pathlib import Path
 from queue import PriorityQueue
 from typing import Generator, cast
 
+import sentry_sdk
 # import pour le scraping et le crawling
 import urllib3
 from cachetools import TTLCache
@@ -178,9 +179,13 @@ class QueueRecharger(threading.Thread):
         Cette méthode gère les signaux de pause et d’arrêt, applique les règles de robots.txt et de délais par domaine, puis orchestre le crawling des pages en évitant les doublons et les conflits entre threads. Elle met à jour les compteurs internes, le bloom filter et la liste d’attente des URLs à explorer jusqu’à la demande d’arrêt du thread.
 
         """
+        def onerror(e: BaseException):
+            sentry_sdk.capture_exception(e)
+
         with self.logger.catch(
             level=LoggingLevels.CRITICAL,
             message=f"A fatal, unexpected error occurred in the run loop of QueueRecharger {self.name} ({self.native_id}). The thread is stopping.",
+            onerror=onerror
         ):
             self.logger.info("QueueRecharger started.")
 
@@ -579,6 +584,7 @@ class Crawler(threading.Thread):
 
         except DatabaseError:
             self.logger.exception("Error while adding a batch to database")
+            sentry_sdk.capture_exception()
         else:
             for processed_url in batch_data.keys():
                 self.crawled_urls_bf.add(processed_url)
@@ -592,9 +598,13 @@ class Crawler(threading.Thread):
         Cette méthode gère les signaux de pause et d’arrêt, contrôle les accès concurrents aux structures partagées et orchestre le cycle complet de traitement d’une URL, depuis la file de priorité jusqu’à la persistance des pages et des liens. Elle met à jour les compteurs internes, les temps de crawl par domaine et le bloom filter jusqu’à ce qu’un arrêt soit demandé via `stop_event`.
 
         """
+        def onerror(e: BaseException) -> None:
+            sentry_sdk.capture_exception(e)
+
         with self.logger.catch(
             level=LoggingLevels.CRITICAL,
             message=f"A fatal, unexpected error occurred in the run loop of {self.name} ({self.native_id}). The thread is stopping.",
+            onerror=onerror,
         ):
             self.logger.info(f"Crawler {self.name} started")
             time.sleep(

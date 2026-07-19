@@ -17,6 +17,7 @@ dependencies = [
     "rbloom>=1.5.4",
     "requests>=2.34.2",
     "selectolax>=0.4.10",
+    "sentry-sdk>=2.66.0",
     "sqlalchemy>=2.0.51",
     "textual>=8.2.8",
     "urllib3>=2.7.0",

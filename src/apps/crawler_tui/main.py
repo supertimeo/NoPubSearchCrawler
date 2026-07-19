@@ -2,7 +2,7 @@ import argparse
 
 from dotenv import load_dotenv
 
-from src.crawler.bootstrap import init_cache, validate_environment
+from src.crawler.bootstrap import init_sentry, init_cache, validate_environment
 from .i18n_setup import init_i18n, load_persisted_locale
 
 load_dotenv()
@@ -50,6 +50,8 @@ def main():
     args = parsing_arguments()
 
     validate_environment()
+
+    init_sentry()
 
     cache = init_cache(args)
     textual_app = CrawlerTerminalApp(cache)
