@@ -10,8 +10,10 @@ class CrawlerNetworkConfig(BaseConfig):
     default_waiting_delay: float
     user_agent: str
     bot_name: str
+    max_retry_per_request: int
     max_retry_per_url: int
     max_retry_per_domain: int
+    retry_backoff_factor: float
 
     @model_validator(mode="after")
     def validate_default_waiting_delay(self) -> CrawlerNetworkConfig:

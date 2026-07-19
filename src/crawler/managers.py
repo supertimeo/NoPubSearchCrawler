@@ -4,9 +4,12 @@ from typing import Optional
 from urllib.parse import ParseResult, urlparse
 
 import requests
+import urllib3
 from diskcache import Cache
 from loguru import logger
 from protego import Protego
+from requests.adapters import HTTPAdapter
+from urllib3 import Retry
 
 from src.configs.crawler_config import CrawlerConfig
 from .errors import NetworkError
@@ -38,8 +41,28 @@ class NetworkManager(BaseDomainManager):
         Args:
             config: Configuration du crawler contenant les paramètres réseau à appliquer aux requêtes HTTP et aux résolutions de domaine.
         """
-        self.session = requests.Session()
         self.config = config
+
+        retry_strategy = Retry(
+            total=self.config.network.max_retry_per_request,  # nombre maximum de tentatives
+            backoff_factor=self.config.network.retry_backoff_factor,  # attente entre les retries (1s, 2s, 4s...)
+            status_forcelist=[  # codes HTTP qui déclenchent un retry
+                429,  # Too Many Requests
+                500,  # Internal Server Error
+                502,
+                503,
+                504,
+            ],
+            allowed_methods={  # méthodes HTTP concernées
+                "GET",
+                "HEAD",
+            },
+        )
+
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session = requests.Session()
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
 
     def fetch_page(self, url):
         """Télécharge la page située à l’URL donnée et renvoie la réponse HTTP associée. Interprète les erreurs réseau et HTTP pour les transformer en `NetworkError` indiquant si une nouvelle tentative est envisageable.
@@ -61,6 +84,9 @@ class NetworkManager(BaseDomainManager):
 
         except requests.Timeout as e:
             raise NetworkError(f"Timeout while fetching {url}", retryable=True) from e
+
+        except urllib3.exceptions.MaxRetryError as e:
+            raise NetworkError(f"Max retry while fetching {url}", retryable=True) from e
 
         except requests.exceptions.SSLError as e:
             raise NetworkError(f"SSL error while fetching {url}") from e
