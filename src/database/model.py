@@ -1,4 +1,4 @@
-from sqlalchemy import String, ForeignKey, Text, UniqueConstraint
+from sqlalchemy import String, ForeignKey, Text, UniqueConstraint, Integer
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -72,11 +72,10 @@ class WaitingURL(Base):
         unique=True
     )
     url: Mapped["URL"] = relationship(cascade="")
+    priority: Mapped[int] = mapped_column()
     domain_crawled_at: Mapped[float] = mapped_column(index=True)
 
-    __table_args__ = {
-        "postgresql_unlogged": True,
-    }
+    __table_args__ = {"prefixes": ["UNLOGGED"]}
 
 
 class CrawledURL(Base):

@@ -54,7 +54,6 @@ def validate_environment() -> None:
     if errors:
         raise ExceptionGroup("Failed to initialize database configuration", errors)
 
-
 @dataclass
 class CrawlerDependencies:
     """Regroupe les dépendances nécessaires au fonctionnement du crawler. Fournit un conteneur structuré pour partager les ressources initialisées entre les différentes parties du système de crawling.
@@ -75,7 +74,6 @@ class CrawlerDependencies:
     crawled_urls_bf: Bloom
     crawled_urls_bf_lock: threading.Lock
     queue: PriorityQueue[tuple[float, str]]
-
 
 def init_db(args: Namespace) -> tuple[Engine, scoped_session[ASession]]:
     """Initialise la base de données et prépare la fabrique de sessions pour le crawler. Crée le moteur SQLAlchemy, applique le schéma et gère éventuellement la suppression de la base existante selon les arguments fournis.
@@ -99,7 +97,6 @@ def init_db(args: Namespace) -> tuple[Engine, scoped_session[ASession]]:
     logger.success(f"Database initialized successfully in {time.time() - start_time}")
 
     return engine, session_factory
-
 
 def init_bloom_filter(session_factory: scoped_session[ASession]) -> tuple[Bloom, threading.Lock]:
     """Initialise le bloom filter utilisé pour suivre les URLs déjà crawlées. Pré-remplit la structure avec les URLs présentes en base afin d’éviter de les re-crawler.
@@ -126,7 +123,6 @@ def init_bloom_filter(session_factory: scoped_session[ASession]) -> tuple[Bloom,
 
     return crawled_urls_bf, crawled_urls_bf_lock
 
-
 def init_queue() -> PriorityQueue:
     """Initialise la file de priorité des URLs à crawler. Charge les URLs de départ depuis le fichier de configuration et les insère avec une priorité initiale.
 
@@ -138,15 +134,14 @@ def init_queue() -> PriorityQueue:
     logger.info("Initializing queue...")
     start_time = time.time()
 
-    queue = PriorityQueue[tuple[float, str]]()
+    queue = PriorityQueue[tuple[float, int, str]]()
     with open(assets_folder_path / "start_url_lists" / "start_urls.json", "r") as f:
         for seed in json.load(f)["crawler_seeds"]:
-            queue.put((0, seed["url"]))
+            queue.put((0, seed["priority"], seed["url"]))
 
     logger.success(f"Queue initialized successfully in {time.time() - start_time}")
 
     return queue
-
 
 def init_cache(args: Namespace) -> Cache:
     """Initialise le cache persistant utilisé par le crawler. Gère éventuellement la suppression complète du cache existant en fonction des arguments de ligne de commande.
@@ -163,7 +158,6 @@ def init_cache(args: Namespace) -> Cache:
         shutil.rmtree(cache_folder_path)
         cache_folder_path.mkdir()
     return Cache(str(cache_folder_path / "robot_txts_cache"))
-
 
 def init_config(crawlers: list[Crawler], queue_recharger: QueueRecharger) -> BaseObserver:
     """Initialise et démarre l’observateur de fichier de configuration du crawler. Configure un gestionnaire d’événements pour réagir aux modifications du fichier de configuration et adapter le comportement des crawlers en conséquence.
@@ -182,7 +176,6 @@ def init_config(crawlers: list[Crawler], queue_recharger: QueueRecharger) -> Bas
 
     observer.start()
     return observer
-
 
 def build_dependencies(args: Namespace, cache: Cache | None = None) -> CrawlerDependencies:
     """Construit et assemble les dépendances nécessaires au démarrage du crawler. Orchestre l’initialisation de la base de données, du bloom filter, de la file de priorité et du cache pour fournir un ensemble cohérent de ressources.
