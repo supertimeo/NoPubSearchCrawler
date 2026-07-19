@@ -1,49 +1,57 @@
 from __future__ import annotations
 
 import math
+
 # import pour la gestion des threads
 import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from queue import PriorityQueue
-from typing import cast, Generator
+from typing import Generator, cast
 
 # import pour le scraping et le crawling
 import urllib3
 from cachetools import TTLCache
+
 # import pour la gestion du cache
 from diskcache import Cache
+
 # import pour la gestion des logs
 from loguru import logger
 from psycopg.errors import StringDataRightTruncation
 from pydantic.v1.dataclasses import dataclass
+
 # imports pour le bloom filter
 from rbloom import Bloom
-from sqlalchemy import select, exists, delete
+from sqlalchemy import delete, exists, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import DataError
-from sqlalchemy.orm import scoped_session, Session as ASession
-from watchdog.events import FileSystemEventHandler, DirMovedEvent, FileMovedEvent
+from sqlalchemy.orm import Session as ASession
+from sqlalchemy.orm import scoped_session
+from watchdog.events import DirMovedEvent, FileMovedEvent, FileSystemEventHandler
 
 from src.common.errors import DatabaseError
 from src.common.paths import crawler_config_file_path
 from src.configs.crawler_config import CrawlerConfig
-from src.database.model import URL, WaitingURL, CrawledURL, Page, Link
-from .errors import NetworkError, CrawlError
+from src.database.model import URL, CrawledURL, Link, Page, WaitingURL
+
+from .errors import CrawlError, NetworkError
 from .log_levels import LoggingLevels
-from .managers import NetworkManager, RobotsTxtManager, HTMLParsingManager, URLManager
+from .managers import HTMLParsingManager, NetworkManager, RobotsTxtManager, URLManager
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # TODO: ajouter sentry pour le logging des erreurs
 
+
 @contextmanager
 def profile_block(name: str):
-    start = time.perf_counter() # perf_counter est plus précis que time.time()
+    start = time.perf_counter()  # perf_counter est plus précis que time.time()
     yield
-    elapsed = (time.perf_counter() - start) * 1000 # En millisecondes
+    elapsed = (time.perf_counter() - start) * 1000  # En millisecondes
     logger.trace(f"[PROFILER] {name} a pris {elapsed:.2f} ms")
+
 
 class ThreadLocalURLTracker[T]:
     def __init__(self, size: int, value: T):
@@ -71,11 +79,12 @@ class CrawlResult:
         links: Ensemble des URLs découvertes sur la page.
         timestamp: Horodatage (en secondes depuis l’époque Unix) indiquant le moment du crawl.
     """
+
     title: str
     content: str
     links: set[str]
     timestamp: float
-    
+
 
 class ConfigFileEventHandler(FileSystemEventHandler):
     """Gère les événements de déplacement du fichier de configuration du crawler. Permet de recharger dynamiquement la configuration lorsque le fichier suivi est modifié ou remplacé.
@@ -86,6 +95,7 @@ class ConfigFileEventHandler(FileSystemEventHandler):
         crawlers: Liste des instances de `Crawler` dont la configuration doit être mise à jour lorsque le fichier de configuration change.
         queue_recharger: Instance de `QueueRecharger` dont la configuration de recharge de la file doit être synchronisée avec le nouveau fichier de configuration.
     """
+
     def __init__(self, crawlers: list[Crawler], queue_recharger: QueueRecharger):
         """Initialise le gestionnaire d’événements avec les composants concernés par les changements de configuration. Lie les instances de `Crawler` et le `QueueRecharger` au gestionnaire afin qu’ils puissent être mis à jour lors des mouvements du fichier de configuration.
 
@@ -97,7 +107,7 @@ class ConfigFileEventHandler(FileSystemEventHandler):
         """
         self.crawlers = crawlers
         self.queue_recharger = queue_recharger
-        
+
     def on_moved(self, event: DirMovedEvent | FileMovedEvent) -> None:
         """Réagit aux événements de déplacement impliquant le fichier de configuration du crawler. Déclenche un rechargement de la configuration lorsque le fichier surveillé est déplacé ou renommé.
 
@@ -130,7 +140,14 @@ class QueueRecharger(threading.Thread):
         last_activity: Horodatage de la dernière activité significative du thread, utile pour la supervision.
         logger: Logger enrichi avec le nom de la classe, utilisé pour tracer les opérations et erreurs du thread.
     """
-    def __init__(self, queue: PriorityQueue[tuple[float, int, int, str]], session_factory: scoped_session[ASession], stop_event: threading.Event, pause_event: threading.Event):
+
+    def __init__(
+        self,
+        queue: PriorityQueue[tuple[float, int, int, str]],
+        session_factory: scoped_session[ASession],
+        stop_event: threading.Event,
+        pause_event: threading.Event,
+    ):
         """Initialise le thread de recharge de la file d’attente du crawler. Configure les ressources nécessaires pour surveiller la file de priorité et interagir avec la base de données selon la configuration courante.
 
         Cette méthode prépare une instance de `QueueRecharger` en enregistrant la file de priorité, la fabrique de sessions, les événements de contrôle, ainsi que la configuration du crawler utilisée pour déterminer les paramètres de recharge. Elle définit également l’identifiant et le nom du thread, initialise les indicateurs d’état et crée un logger enrichi pour tracer le fonctionnement du recharger.
@@ -161,9 +178,11 @@ class QueueRecharger(threading.Thread):
         Cette méthode gère les signaux de pause et d’arrêt, applique les règles de robots.txt et de délais par domaine, puis orchestre le crawling des pages en évitant les doublons et les conflits entre threads. Elle met à jour les compteurs internes, le bloom filter et la liste d’attente des URLs à explorer jusqu’à la demande d’arrêt du thread.
 
         """
-        with self.logger.catch(level=LoggingLevels.CRITICAL, message=f"A fatal, unexpected error occurred in the run loop of QueueRecharger {self.name} ({self.native_id}). The thread is stopping."):
+        with self.logger.catch(
+            level=LoggingLevels.CRITICAL,
+            message=f"A fatal, unexpected error occurred in the run loop of QueueRecharger {self.name} ({self.native_id}). The thread is stopping.",
+        ):
             self.logger.info("QueueRecharger started.")
-
 
             while not self.stop_event.is_set():
                 if self.pause_event.is_set():
@@ -180,11 +199,16 @@ class QueueRecharger(threading.Thread):
                 self.last_activity = time.time()
                 time.sleep(1)
                 if self.queue.qsize() < self.config.min_queue_size:
-                    with self.logger.catch(level=LoggingLevels.ERROR, message=f"Failed to recharge the queue (current size: {self.queue.qsize()}, min: {self.config.min_queue_size}). Will retry on the next cycle."):
+                    with self.logger.catch(
+                        level=LoggingLevels.ERROR,
+                        message=f"Failed to recharge the queue (current size: {self.queue.qsize()}, min: {self.config.min_queue_size}). Will retry on the next cycle.",
+                    ):
                         self.logger.debug("Recharging the queue...")
                         start_time = time.time()
                         self.recharge_queue()
-                        self.logger.debug(f"Queue recharged in {time.time() - start_time} seconds")
+                        self.logger.debug(
+                            f"Queue recharged in {time.time() - start_time} seconds"
+                        )
             self.logger.success(f"{self.name} finished successfully.")
 
     def recharge_queue(self):
@@ -194,7 +218,17 @@ class QueueRecharger(threading.Thread):
 
         """
         with self.session_factory() as session:
-            urls = session.execute(select(URL.url, WaitingURL.domain_crawled_at, WaitingURL.id, WaitingURL.priority).join(WaitingURL.url).order_by(WaitingURL.domain_crawled_at.asc(), WaitingURL.priority).limit(self.config.max_queue_size - self.queue.qsize())).all()
+            urls = session.execute(
+                select(
+                    URL.url,
+                    WaitingURL.domain_crawled_at,
+                    WaitingURL.id,
+                    WaitingURL.priority,
+                )
+                .join(WaitingURL.url)
+                .order_by(WaitingURL.domain_crawled_at.asc(), WaitingURL.priority)
+                .limit(self.config.max_queue_size - self.queue.qsize())
+            ).all()
         ids = [url[2] for url in urls]
 
         if not ids:
@@ -202,7 +236,14 @@ class QueueRecharger(threading.Thread):
 
         for url in urls:
             self.queue.put((url[1], url[3], 0, url[0]))
-        with self.session_factory() as session, self.logger.catch(level=LoggingLevels.ERROR, message=f"Failed to remove {len(ids)} recharged URL(s) from the waiting list. Rolling back transaction.", onerror=lambda _: session.rollback()):
+        with (
+            self.session_factory() as session,
+            self.logger.catch(
+                level=LoggingLevels.ERROR,
+                message=f"Failed to remove {len(ids)} recharged URL(s) from the waiting list. Rolling back transaction.",
+                onerror=lambda _: session.rollback(),
+            ),
+        ):
             session.execute(delete(WaitingURL).where(WaitingURL.id.in_(ids)))
             session.commit()
 
@@ -239,11 +280,23 @@ class Crawler(threading.Thread):
         last_activity: Horodatage de la dernière activité significative du thread, utile pour la supervision.
 
     """
-    def __init__(self, queue: PriorityQueue[tuple[float, int, int, str]], session_factory: scoped_session[ASession],
-                 cache: Cache, stop_event: threading.Event, pause_event: threading.Event, crawler_id: int,
-                 crawling_urls: ThreadLocalURLTracker[str], crawling_urls_lock: threading.Lock, domain_crawl_time: dict[str, float],
-                 domain_crawl_time_lock: threading.Lock, crawled_urls_bf: Bloom, remove_params: list[str],
-                 crawled_urls_bf_lock: threading.Lock):
+
+    def __init__(
+        self,
+        queue: PriorityQueue[tuple[float, int, int, str]],
+        session_factory: scoped_session[ASession],
+        cache: Cache,
+        stop_event: threading.Event,
+        pause_event: threading.Event,
+        crawler_id: int,
+        crawling_urls: ThreadLocalURLTracker[str],
+        crawling_urls_lock: threading.Lock,
+        domain_crawl_time: dict[str, float],
+        domain_crawl_time_lock: threading.Lock,
+        crawled_urls_bf: Bloom,
+        remove_params: list[str],
+        crawled_urls_bf_lock: threading.Lock,
+    ):
         """Initialise un thread de crawler avec toutes ses dépendances partagées. Prépare les structures de synchronisation, la configuration, les gestionnaires réseau et robots.txt ainsi que les compteurs internes pour le cycle de vie du thread.
 
         Cette méthode enregistre la file de priorité, la fabrique de sessions, le cache, les verrous et les structures de suivi nécessaires pour permettre au crawler de fonctionner correctement en environnement concurrent. Elle configure également le bloom filter, les paramètres de nettoyage d’URLs, le logger et les gestionnaires externes afin que le thread soit prêt à consommer des URLs dès son démarrage.
@@ -272,7 +325,7 @@ class Crawler(threading.Thread):
         self.crawling_urls_lock = crawling_urls_lock
         self.domain_crawl_time = domain_crawl_time
         self.domain_crawl_time_lock = domain_crawl_time_lock
-        self.name = f"Crawler-{crawler_id+1}"
+        self.name = f"Crawler-{crawler_id + 1}"
         self.crawled_urls_bf = crawled_urls_bf
         self.crawler_id = crawler_id
         self.remove_params = remove_params
@@ -280,7 +333,7 @@ class Crawler(threading.Thread):
 
         self.domain_errors_count_cache = TTLCache(maxsize=1000, ttl=600)
         self.down_domains_cache = TTLCache(maxsize=math.inf, ttl=3600)
-        
+
         self.config = CrawlerConfig.load_from_yml(crawler_config_file_path)
 
         self.crawled_urls_bf_lock = crawled_urls_bf_lock
@@ -288,7 +341,9 @@ class Crawler(threading.Thread):
         self.logger = logger.bind(class_name=self.__class__.__name__)
 
         self.network_manager = NetworkManager(self.config)
-        self.robots_txt_manager = RobotsTxtManager(self.cache, self.network_manager, self.config)
+        self.robots_txt_manager = RobotsTxtManager(
+            self.cache, self.network_manager, self.config
+        )
         self.url_manager = URLManager(self.config, self.robots_txt_manager)
         self.html_parsing_manager = HTMLParsingManager(self.url_manager)
 
@@ -346,7 +401,18 @@ class Crawler(threading.Thread):
             True si l’URL est déjà enregistrée comme crawlée, False sinon.
         """
         with self.db_transaction() as session:
-            return url in self.crawled_urls_bf and cast(bool, session.scalar(select(exists(select(CrawledURL).join(CrawledURL.url).where(URL.url == url)))))
+            return url in self.crawled_urls_bf and cast(
+                bool,
+                session.scalar(
+                    select(
+                        exists(
+                            select(CrawledURL)
+                            .join(CrawledURL.url)
+                            .where(URL.url == url)
+                        )
+                    )
+                ),
+            )
 
     def insert_urls_in_waiting_list(self, session: ASession, urls: list[URL]) -> None:
         """Ajoute une liste d’URLs dans la table des URLs en attente de crawl. Prépare pour chaque URL un enregistrement contenant son identifiant et l’instant approximatif de dernier crawl de domaine afin de respecter les délais.
@@ -363,14 +429,22 @@ class Crawler(threading.Thread):
         with self.domain_crawl_time_lock:
             domain_crawl_time = self.domain_crawl_time.copy()
 
-        session.execute(insert(WaitingURL).values([
-            {
-                "url_id": url.id,
-                "domain_crawled_at": domain_crawl_time.get(self.url_manager.urlparse_(url.url).netloc, time.time()),
-                "priority": 1,
-            }
-            for url in urls
-        ]).on_conflict_do_nothing(index_elements=["url_id"]))
+        session.execute(
+            insert(WaitingURL)
+            .values(
+                [
+                    {
+                        "url_id": url.id,
+                        "domain_crawled_at": domain_crawl_time.get(
+                            self.url_manager.urlparse_(url.url).netloc, time.time()
+                        ),
+                        "priority": 1,
+                    }
+                    for url in urls
+                ]
+            )
+            .on_conflict_do_nothing(index_elements=["url_id"])
+        )
 
     def crawl(self, url: str) -> CrawlResult:
         """Crawle une URL et extrait les informations principales de la page. Retourne le titre, le contenu textuel principal et l’ensemble des liens pertinents découverts.
@@ -397,24 +471,28 @@ class Crawler(threading.Thread):
             raise
         self.logger.trace(f"Get {url} in {time.time() - start_time} seconds")
 
-        if not response.headers.get("Content-Type") or not response.headers.get("Content-Type").startswith("text/html"): # type: ignore
+        if not response.headers.get("Content-Type") or not response.headers.get(
+            "Content-Type"
+        ).startswith("text/html"):  # type: ignore
             self.logger.debug(f"URL {url} is not text/html page")
             raise CrawlError(f"URL {url} is not text/html page")
 
         tree = self.html_parsing_manager.parse_html(response.text)
-        
+
         title = self.html_parsing_manager.extract_title(tree)
         links = self.html_parsing_manager.extract_links(url, tree)
         content = self.html_parsing_manager.extract_main_content(tree)
 
         # Retourne le titre, le contenu et les liens de la page
         self.logger.info(f"Crawled page : {url}")
-        return CrawlResult(title=title, content=content, links=links, timestamp=time.time())
+        return CrawlResult(
+            title=title, content=content, links=links, timestamp=time.time()
+        )
 
     @staticmethod
     def insert_urls_in_db(
-            urls: set[str] | tuple[str, ...],
-            session: ASession,
+        urls: set[str] | tuple[str, ...],
+        session: ASession,
     ) -> dict[str, URL]:
         """Insère un ensemble d’URLs dans la base de données si elles n’existent pas encore. Retourne un dictionnaire associant chaque URL texte à son objet `URL` persistant.
 
@@ -450,7 +528,7 @@ class Crawler(threading.Thread):
 
         try:
             with self.db_transaction(autocommit=True) as session:
-                all_links_set = { # sourcery skip
+                all_links_set = {  # sourcery skip
                     link for cr in batch_data.values() for link in cr.links
                 }
                 all_urls = set(batch_data.keys()) | set(
@@ -508,15 +586,20 @@ class Crawler(threading.Thread):
         finally:
             batch_data.clear()
 
-    def run(self):    # sourcery skip: low-code-quality
+    def run(self):  # sourcery skip: low-code-quality
         """Exécute la boucle principale du thread de crawler. Coordonne la récupération des URLs, leur filtrage, le respect des délais de crawl et l’enregistrement des résultats en base de données.
 
         Cette méthode gère les signaux de pause et d’arrêt, contrôle les accès concurrents aux structures partagées et orchestre le cycle complet de traitement d’une URL, depuis la file de priorité jusqu’à la persistance des pages et des liens. Elle met à jour les compteurs internes, les temps de crawl par domaine et le bloom filter jusqu’à ce qu’un arrêt soit demandé via `stop_event`.
 
         """
-        with self.logger.catch(level=LoggingLevels.CRITICAL, message=f"A fatal, unexpected error occurred in the run loop of {self.name} ({self.native_id}). The thread is stopping."):
+        with self.logger.catch(
+            level=LoggingLevels.CRITICAL,
+            message=f"A fatal, unexpected error occurred in the run loop of {self.name} ({self.native_id}). The thread is stopping.",
+        ):
             self.logger.info(f"Crawler {self.name} started")
-            time.sleep(5) # Attente de 5 secondes pour permettre le démarrage des threads
+            time.sleep(
+                5
+            )  # Attente de 5 secondes pour permettre le démarrage des threads
 
             batch_data: dict[str, CrawlResult] = {}
 
@@ -543,7 +626,9 @@ class Crawler(threading.Thread):
                 self.logger.trace(f"Get {url} in the queue")
 
                 if num_retry_per_url >= self.config.network.max_retry_per_url:
-                    self.logger.debug(f"Failed to crawl {url} after {num_retry_per_url} attempts (maximum: {self.config.network.max_retry_per_url}). Giving up.")
+                    self.logger.debug(
+                        f"Failed to crawl {url} after {num_retry_per_url} attempts (maximum: {self.config.network.max_retry_per_url}). Giving up."
+                    )
                     continue
 
                 parsed_url = self.url_manager.urlparse_(url)
@@ -558,7 +643,9 @@ class Crawler(threading.Thread):
 
                 delay = self.robots_txt_manager.get_crawl_delay(url)
                 if domain_crawled_at + delay > time.time():
-                    self.queue.put((domain_crawled_at, priority, num_retry_per_url, url))
+                    self.queue.put(
+                        (domain_crawled_at, priority, num_retry_per_url, url)
+                    )
                     self.logger.trace(f"{domain} is not ready for crawling")
                     time.sleep(0.5)
                     continue
@@ -575,7 +662,9 @@ class Crawler(threading.Thread):
 
                 with self.crawling_urls_lock:
                     if url in self.crawling_urls:
-                        self.logger.trace(f"{url} The URL is already being crawled by another crawler.")
+                        self.logger.trace(
+                            f"{url} The URL is already being crawled by another crawler."
+                        )
                         time.sleep(0.5)
                         continue
                     self.crawling_urls[self.crawler_id] = url
@@ -595,7 +684,10 @@ class Crawler(threading.Thread):
                             self.domain_errors_count_cache[domain] = 0
                         self.domain_errors_count_cache[domain] += 1
 
-                        if self.domain_errors_count_cache[domain] >= self.config.network.max_retry_per_domain:
+                        if (
+                            self.domain_errors_count_cache[domain]
+                            >= self.config.network.max_retry_per_domain
+                        ):
                             if not self.network_manager.tcp_ping(domain):
                                 self.down_domains_cache[domain] = 1
                                 continue
@@ -607,20 +699,34 @@ class Crawler(threading.Thread):
 
                     try:
                         with self.db_transaction(autocommit=True) as session:
-                            session.add(CrawledURL(url=list(self.insert_urls_in_db({url}, session).values())[0]))
+                            session.add(
+                                CrawledURL(
+                                    url=list(
+                                        self.insert_urls_in_db({url}, session).values()
+                                    )[0]
+                                )
+                            )
                     except DatabaseError:
-                        self.logger.exception(f"Error while adding {url} to crawled urls")
+                        self.logger.exception(
+                            f"Error while adding {url} to crawled urls"
+                        )
                     else:
                         self.crawled_urls_bf.add(url)
                     continue
 
-                self.logger.debug(f"Crawled page {url} in {time.time() - start_time} seconds")
+                self.logger.debug(
+                    f"Crawled page {url} in {time.time() - start_time} seconds"
+                )
 
                 with self.domain_crawl_time_lock:
                     self.domain_crawl_time[domain] = time.time() + delay
 
                 # Vérification si le titre, le contenu et les liens sont valides
-                if not crawl_result.title and not crawl_result.content and not crawl_result.links:
+                if (
+                    not crawl_result.title
+                    and not crawl_result.content
+                    and not crawl_result.links
+                ):
                     self.logger.warning(f"Invalid page {url}")
                     continue
 

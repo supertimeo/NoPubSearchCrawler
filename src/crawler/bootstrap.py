@@ -9,24 +9,39 @@ import time
 from argparse import Namespace
 from dataclasses import dataclass
 from queue import PriorityQueue
-from typing import cast, TYPE_CHECKING, Optional, overload, Literal
+from typing import TYPE_CHECKING, Literal, Optional, cast, overload
 
 from diskcache import Cache
 from loguru import logger
 from rbloom import Bloom
-from sqlalchemy import Engine, select, func
-from sqlalchemy.orm import scoped_session, Session as ASession
+from sqlalchemy import Engine, func, select
+from sqlalchemy.orm import Session as ASession
+from sqlalchemy.orm import scoped_session
 from watchdog.observers import Observer
 
 if TYPE_CHECKING:
     from watchdog.observers import BaseObserver
 
-from src.common.errors import ConfigurationError, InitializationError, MissingEnvironmentVariableError
-from src.common.paths import assets_folder_path, cache_folder_path, crawler_config_file_path
+from src.common.errors import (
+    ConfigurationError,
+    InitializationError,
+    MissingEnvironmentVariableError,
+)
+from src.common.paths import (
+    assets_folder_path,
+    cache_folder_path,
+    crawler_config_file_path,
+)
 from src.configs.crawler_config import CrawlerConfig
 from src.database.model import URL, CrawledURL
 from src.database.session import create_db_engine, create_session_factory, init_schema
-from .engine import Crawler, ConfigFileEventHandler, ThreadLocalURLTracker, QueueRecharger
+
+from .engine import (
+    ConfigFileEventHandler,
+    Crawler,
+    QueueRecharger,
+    ThreadLocalURLTracker,
+)
 from .log_levels import LoggingLevels
 
 

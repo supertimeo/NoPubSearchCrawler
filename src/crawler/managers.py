@@ -5,11 +5,11 @@ from functools import lru_cache
 from typing import Optional
 from urllib.parse import (
     ParseResult,
-    urlparse,
-    urljoin,
-    urlencode,
-    urlunparse,
     parse_qsl,
+    urlencode,
+    urljoin,
+    urlparse,
+    urlunparse,
 )
 
 import requests
@@ -22,7 +22,8 @@ from selectolax.parser import HTMLParser
 from urllib3 import Retry
 
 from src.configs.crawler_config import CrawlerConfig
-from .errors import NetworkError, NotCrawlableError, CrawlError
+
+from .errors import CrawlError, NetworkError, NotCrawlableError
 
 
 class BaseManager:

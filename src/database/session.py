@@ -3,7 +3,8 @@ from typing import cast
 
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.engine import URL as DB_URL
-from sqlalchemy.orm import Session as ASession, scoped_session, sessionmaker
+from sqlalchemy.orm import Session as ASession
+from sqlalchemy.orm import scoped_session, sessionmaker
 
 from .model import Base
 
