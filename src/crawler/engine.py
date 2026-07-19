@@ -480,8 +480,11 @@ class Crawler(threading.Thread):
                     self.logger.debug(f"Failed to crawl {url} after {num_retry_per_url} attempts (maximum: {self.config.network.max_retry_per_url}). Giving up.")
                     continue
 
-                if self.url_manager.urlparse_(url).netloc in self.down_domains_cache:
-                    logger.debug(f"{self.url_manager.urlparse_(url).netloc} is down. Giving up.")
+                parsed_url = self.url_manager.urlparse_(url)
+                domain = parsed_url.netloc
+
+                if domain in self.down_domains_cache:
+                    logger.debug(f"{domain} is down. Giving up.")
                     continue
 
                 # Nettoyer l'URL
@@ -490,7 +493,7 @@ class Crawler(threading.Thread):
                 delay = self.robots_txt_manager.get_crawl_delay(url)
                 if domain_crawled_at + delay > time.time():
                     self.queue.put((domain_crawled_at, priority, num_retry_per_url, url))
-                    self.logger.trace(f"{self.url_manager.urlparse_(url).netloc} is not ready for crawling")
+                    self.logger.trace(f"{domain} is not ready for crawling")
                     time.sleep(0.5)
                     continue
 
@@ -522,15 +525,15 @@ class Crawler(threading.Thread):
                         continue
                         
                     if e.retryable:
-                        if (domain := self.url_manager.urlparse_(url).netloc) not in self.domain_errors_count_cache:
+                        if domain not in self.domain_errors_count_cache:
                             self.domain_errors_count_cache[domain] = 0
-                        self.domain_errors_count_cache[self.url_manager.urlparse_(url).netloc] += 1
+                        self.domain_errors_count_cache[domain] += 1
 
-                        if self.domain_errors_count_cache[self.url_manager.urlparse_(url).netloc] >= self.config.network.max_retry_per_domain:
-                            if not self.network_manager.tcp_ping(self.url_manager.urlparse_(url).netloc):
-                                self.down_domains_cache[self.url_manager.urlparse_(url).netloc] = 1
+                        if self.domain_errors_count_cache[domain] >= self.config.network.max_retry_per_domain:
+                            if not self.network_manager.tcp_ping(domain):
+                                self.down_domains_cache[domain] = 1
                                 continue
-                            del self.domain_errors_count_cache[self.url_manager.urlparse_(url).netloc]
+                            del self.domain_errors_count_cache[domain]
                         
                         with self.domain_crawl_time_lock:
                             self.queue.put((time.time(), 2, num_retry_per_url + 1, url))
@@ -548,7 +551,7 @@ class Crawler(threading.Thread):
                 self.logger.debug(f"Crawled page {url} in {time.time() - start_time} seconds")
 
                 with self.domain_crawl_time_lock:
-                    self.domain_crawl_time[self.url_manager.urlparse_(url).netloc] = time.time() + delay
+                    self.domain_crawl_time[domain] = time.time() + delay
 
                 # Vérification si le titre, le contenu et les liens sont valides
                 if not crawl_result.title and not crawl_result.content and not crawl_result.links:
@@ -557,7 +560,7 @@ class Crawler(threading.Thread):
 
                 try:
                     with self.db_transaction(autocommit=True) as session:
-                        all_urls = {url} | set(filter(lambda link: self.url_manager.urlparse_(link).netloc not in self.down_domains_cache, crawl_result.links))
+                        all_urls = {url} | set(filter(lambda link: domain not in self.down_domains_cache, crawl_result.links))
 
                         with profile_block("Insert all urls in db"):
                             url_objs_dict = self.insert_urls_in_db(all_urls, session)
