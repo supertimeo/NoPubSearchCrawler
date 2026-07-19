@@ -1,7 +1,7 @@
 import os
 from typing import cast
 
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.engine import URL as DB_URL
 from sqlalchemy.orm import Session as ASession, scoped_session, sessionmaker
 
@@ -20,7 +20,15 @@ def build_db_url() -> DB_URL:
 
 
 def create_db_engine(*, pool_size: int = 20, max_overflow: int = 10) -> Engine:
-    return create_engine(build_db_url(), pool_size=pool_size, max_overflow=max_overflow)
+    engine = create_engine(build_db_url(), pool_size=pool_size, max_overflow=max_overflow)
+
+    @event.listens_for(engine, "connect")
+    def set_synchronous_commit(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("SET synchronous_commit = off;")
+        cursor.close()
+        
+    return engine
 
 
 def create_session_factory(engine: Engine) -> scoped_session[ASession]:
