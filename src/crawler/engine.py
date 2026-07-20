@@ -43,9 +43,6 @@ from .managers import HTMLParsingManager, NetworkManager, RobotsTxtManager, URLM
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# TODO: ajouter sentry pour le logging des erreurs
-
-
 @contextmanager
 def profile_block(name: str):
     start = time.perf_counter()  # perf_counter est plus précis que time.time()
@@ -748,5 +745,4 @@ class Crawler(threading.Thread):
 
                 self.flush_batch(batch_data)
 
-            self.logger.success(f"{self.name} finished successfully")
             self.logger.success(f"{self.name} finished successfully")

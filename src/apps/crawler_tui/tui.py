@@ -22,6 +22,7 @@ from diskcache import Cache
 from dotenv import find_dotenv, dotenv_values, set_key
 from pydantic import BaseModel
 from rbloom import Bloom
+from rich.text import Text
 from sqlalchemy import func, select
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -345,7 +346,7 @@ class DashboardPage(Container):
         self.query_one("#waiting_pages", Label).update(f"{num_urls_in_waiting_list}{trend}")
 
 
-class LogsPage(Log):
+class LogsPage(RichLog):
     """Page Textual d'affichage des logs du crawler avec filtrage par niveau et source.
     Cette classe permet de sélectionner un crawler, d'ajuster le seuil de logs et d'afficher les messages en temps réel.
 
@@ -433,7 +434,8 @@ class LogsPage(Log):
                 to_write.append(raw_msg)
 
         if to_write:
-            self.write_lines(to_write)
+            for msg in to_write:
+                self.write(Text.from_ansi(msg))
             # Bug Textual : après une purge interne (buffer > max_lines, fréquent
             # avec les tracebacks multi-lignes), write_lines() marque la mauvaise
             # plage de lignes "à repeindre" car les index ont été décalés par la
@@ -492,7 +494,8 @@ class LogsPage(Log):
             )
         ]:
             # noinspection PyUnboundLocalVariable
-            self.write_lines(to_write)
+            for msg in to_write:
+                self.write(Text.from_ansi(msg))
             self.refresh()
 
 class LogsHomePage(Container):

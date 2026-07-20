@@ -381,7 +381,6 @@ class HTMLParsingManager(BaseManager):
         return title.replace('\x00', '')[:512]
 
     def extract_links(self, base_url: str, tree: HTMLParser) -> set[str]:
-        # TODO: Ajouter un parser pour le sitemap.xml
         try:
             return {
                 pure_url

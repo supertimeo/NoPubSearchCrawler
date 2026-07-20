@@ -89,6 +89,6 @@ def init_logger(args: argparse.Namespace, textual_app: CrawlerTerminalApp):
         # tel quel au vrai terminal en plus des codes générés par Textual,
         # ce qui peut corrompre l'affichage des lignes suivantes (résidus,
         # chevauchement) sans que ça se voie dans un test headless.
-        colorize=False,
+        colorize=True,
     )
     logger.info("Logger initialized")
